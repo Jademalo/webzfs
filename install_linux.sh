@@ -99,6 +99,19 @@ fi
 
 echo -e "${GREEN}✓${NC} npm $(npm --version) found"
 
+# Check for sudo
+# WebZFS runs as the unprivileged webzfs user and requires sudo to execute
+# approved ZFS and system administration commands. Some distributions,
+# notably Proxmox VE, do not install sudo by default.
+if ! command_exists sudo; then
+    echo -e "${RED}Error: sudo is not installed${NC}"
+    echo "WebZFS runs as an unprivileged service account and requires sudo"
+    echo "to execute approved ZFS and system administration commands."
+    exit 1
+fi
+
+echo -e "${GREEN}✓${NC} sudo found"
+
 # Check for ZFS
 if ! command_exists zpool || ! command_exists zfs; then
     echo -e "${YELLOW}Warning: ZFS utilities not found in PATH${NC}"

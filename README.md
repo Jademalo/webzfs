@@ -69,6 +69,7 @@ The application automatically detects the operating system and adapts its behavi
 - Linux or FreeBSD with ZFS support
 - Python 3.11+
 - Node.js v20+ and npm
+- sudo (required on Linux; the service runs as an unprivileged user and uses sudo for approved commands. Note: Proxmox VE does not install sudo by default)
 - ZFS utilities (zpool, zfs, zdb)
 - smartmontools (smartctl)
 - sanoid (optional)
