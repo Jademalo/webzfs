@@ -73,6 +73,14 @@ The application automatically detects the operating system and adapts its behavi
 - smartmontools (smartctl)
 - sanoid (optional)
 - smartd (optional)
+- sudo (on linux
+
+#### FreeBSD Package Requirements: (Automatically installed with the install script)
+#### ArchLinux Requirements:
+#### RHEL Package Requirements:
+#### Fedora Package Requirements: 
+#### SUSE Package Requirements:
+#### Debain/Ubuntu/Proxmox Package Requirements: sudo nodejs npm libsodium-dev python3.13-venv python3-pip python3-full sanoid smartmontools
 
 ### Installation
 
