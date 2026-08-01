@@ -120,6 +120,8 @@ class SyncoidService:
         force_delete: bool = False,
         ssh_cipher: Optional[str] = None,
         ssh_port: Optional[int] = None,
+        ssh_key: Optional[str] = None,
+        ssh_options: Optional[List[str]] = None,
         source_host: Optional[str] = None,
         target_host: Optional[str] = None,
         debug: bool = False,
@@ -144,6 +146,13 @@ class SyncoidService:
             force_delete: Force delete conflicting snapshots on target
             ssh_cipher: SSH cipher to use (e.g., aes128-gcm@openssh.com)
             ssh_port: SSH port to use
+            ssh_key: Absolute path to the SSH private key (--sshkey).
+                     Required for remote replication so syncoid does not
+                     depend on the executing user's default SSH identity
+                     search (issue #195).
+            ssh_options: List of SSH -o option strings passed via
+                         --sshoption (e.g. ['IdentitiesOnly=yes',
+                         'StrictHostKeyChecking=yes']).
             source_host: Source SSH host (alternative to including in source string)
             target_host: Target SSH host (alternative to including in target string)
             debug: Enable debug output
@@ -202,6 +211,16 @@ class SyncoidService:
             if ssh_port:
                 cmd.extend(['--sshport', str(ssh_port)])
             
+            if ssh_key:
+                # Explicit identity file. Without this, syncoid running
+                # under sudo would search root's SSH environment for keys
+                # and fail with keys managed by SSH Manager (issue #195).
+                cmd.extend(['--sshkey', ssh_key])
+            
+            if ssh_options:
+                for option in ssh_options:
+                    cmd.extend(['--sshoption', option])
+            
             if debug:
                 cmd.append('--debug')
             
@@ -226,8 +245,10 @@ class SyncoidService:
             # Add source and target
             cmd.extend([source_str, target_str])
             
-            # Execute the command with platform-appropriate sudo
-            result = run_privileged_command(cmd, check=False)
+            # Execute through a single seam so the privilege model can be
+            # changed in one place (planned least-privilege work will run
+            # syncoid as the webzfs user instead of via sudo).
+            result, display_command = self._run_syncoid(cmd)
             
             # Parse output for stats
             stats = self._parse_syncoid_output(result.stdout, result.stderr)
@@ -238,7 +259,7 @@ class SyncoidService:
                 'stdout': result.stdout,
                 'stderr': result.stderr,
                 'stats': stats,
-                'command': ' '.join(cmd)
+                'command': display_command
             }
             
         except Exception as e:
@@ -246,6 +267,37 @@ class SyncoidService:
                 'success': False,
                 'error': str(e)
             }
+    
+    def _run_syncoid(self, cmd: List[str]) -> tuple:
+        """
+        Execute a syncoid command with the current privilege policy.
+        
+        This is the single execution seam for syncoid. The current policy
+        wraps the command with sudo on Linux via run_privileged_command().
+        A future least-privilege change (run syncoid as the webzfs user
+        with only ZFS subcommands elevated) only needs to modify this
+        method.
+        
+        Args:
+            cmd: The syncoid command and arguments (without sudo)
+            
+        Returns:
+            Tuple of (CompletedProcess, display_command) where
+            display_command is the shell-quoted representation of the
+            actual executed command including any privilege wrapper.
+        """
+        from services.utils import build_privileged_command
+        
+        full_cmd = build_privileged_command(cmd)
+        result = subprocess.run(
+            full_cmd,
+            check=False,
+            text=True,
+            capture_output=True
+        )
+        # Report the actual executed argv (including sudo when used) so
+        # troubleshooting reflects the real execution identity.
+        return result, shlex.join(full_cmd)
     
     def get_common_snapshots(
         self,

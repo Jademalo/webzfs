@@ -163,10 +163,11 @@
                     </div>
                 </div>
 
-                <!-- Hidden fields for form submission -->
-                <input type="hidden" name="source_host" id="source_host" value="">
-                <input type="hidden" name="target_host" id="target_host" value="">
-                <input type="hidden" name="ssh_port" id="ssh_port" value="22">
+                <!-- Topology warning shown when two different remote connections are selected -->
+                <div id="topology-warning" class="hidden mb-6 bg-danger-900/30 border border-danger-700 text-danger-400 px-4 py-3 rounded-lg text-sm">
+                    Remote-to-remote replication between two different SSH connections is not supported yet.
+                    One side must be Local, or both sides must use the same SSH connection.
+                </div>
                 
                 {% if not ssh_connections or ssh_connections|length == 0 %}
                 <div class="mb-6 bg-warning-900/30 border border-warning-700 text-warning-400 px-4 py-3 rounded-lg">
@@ -386,16 +387,32 @@
     const targetSshSelect = document.getElementById('target_ssh_connection');
     const sourceDatasetSelect = document.getElementById('source');
     const targetDatasetSelect = document.getElementById('target');
-    const sourceHostInput = document.getElementById('source_host');
-    const targetHostInput = document.getElementById('target_host');
-    const sshPortInput = document.getElementById('ssh_port');
+    const topologyWarning = document.getElementById('topology-warning');
+    const syncoidForm = document.getElementById('syncoid-form');
     const sourceLoading = document.getElementById('source-loading');
     const targetLoading = document.getElementById('target-loading');
     const sourceStatus = document.getElementById('source-status');
     const targetStatus = document.getElementById('target-status');
     
+    // Check whether two different remote connections are selected.
+    // The backend rejects this topology; warn the user before submit.
+    function updateTopologyWarning() {
+        const bothRemoteAndDifferent = sourceSshSelect.value
+            && targetSshSelect.value
+            && sourceSshSelect.value !== targetSshSelect.value;
+        topologyWarning.classList.toggle('hidden', !bothRemoteAndDifferent);
+        return bothRemoteAndDifferent;
+    }
+    
+    syncoidForm.addEventListener('submit', function(event) {
+        if (updateTopologyWarning()) {
+            event.preventDefault();
+            topologyWarning.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    });
+    
     // Fetch datasets for a connection
-    async function fetchDatasets(connectionId, datasetSelect, loadingEl, statusEl, hostInput, isSource) {
+    async function fetchDatasets(connectionId, datasetSelect, loadingEl, statusEl, isSource) {
         loadingEl.classList.remove('hidden');
         datasetSelect.innerHTML = '<option value="">-- Loading... --</option>';
         datasetSelect.disabled = true;
@@ -425,24 +442,6 @@
                     ? `${data.datasets.length} local datasets available` 
                     : `${data.datasets.length} datasets from ${data.connection_name}`;
                 statusEl.className = 'text-success-400 text-xs mt-1';
-                
-                // Update the hidden host field
-                if (connectionId) {
-                    const selectedOption = (isSource ? sourceSshSelect : targetSshSelect).options[(isSource ? sourceSshSelect : targetSshSelect).selectedIndex];
-                    const host = selectedOption.dataset.host;
-                    const username = selectedOption.dataset.username;
-                    const port = selectedOption.dataset.port;
-                    hostInput.value = `${username}@${host}`;
-                    
-                    // Update port
-                    if (isSource && !targetSshSelect.value) {
-                        sshPortInput.value = port;
-                    } else if (!isSource) {
-                        sshPortInput.value = port;
-                    }
-                } else {
-                    hostInput.value = '';
-                }
             } else {
                 datasetSelect.innerHTML = '<option value="">-- Error loading --</option>';
                 statusEl.textContent = data.error || 'Failed to load datasets';
@@ -459,17 +458,19 @@
     
     // Handle source connection change
     sourceSshSelect.addEventListener('change', function() {
-        fetchDatasets(this.value, sourceDatasetSelect, sourceLoading, sourceStatus, sourceHostInput, true);
+        updateTopologyWarning();
+        fetchDatasets(this.value, sourceDatasetSelect, sourceLoading, sourceStatus, true);
     });
     
     // Handle target connection change
     targetSshSelect.addEventListener('change', function() {
-        fetchDatasets(this.value, targetDatasetSelect, targetLoading, targetStatus, targetHostInput, false);
+        updateTopologyWarning();
+        fetchDatasets(this.value, targetDatasetSelect, targetLoading, targetStatus, false);
     });
     
     // Load local datasets on page load
-    fetchDatasets('', sourceDatasetSelect, sourceLoading, sourceStatus, sourceHostInput, true);
-    fetchDatasets('', targetDatasetSelect, targetLoading, targetStatus, targetHostInput, false);
+    fetchDatasets('', sourceDatasetSelect, sourceLoading, sourceStatus, true);
+    fetchDatasets('', targetDatasetSelect, targetLoading, targetStatus, false);
 })();
 </script>
 {% endblock %}
