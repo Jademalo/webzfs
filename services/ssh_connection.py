@@ -28,9 +28,16 @@ class SSHConnectionService:
         # Set up connections file
         self.connections_file = self.config_dir / "ssh_connections.json"
         
-        # Set up SSH keys directory
-        self.keys_dir = Path.home() / ".ssh" / "webzfs_connections"
+        # Set up SSH keys directory.
+        # Paths are resolved to absolute paths so they remain valid when
+        # commands are executed under sudo where HOME may differ.
+        self.keys_dir = (Path.home() / ".ssh" / "webzfs_connections").resolve()
         self.keys_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        
+        # WebZFS-owned known_hosts database. All SSH commands built by this
+        # service use this file with strict host key checking instead of
+        # disabling host key verification.
+        self.known_hosts_file = (Path.home() / ".ssh" / "webzfs_known_hosts").resolve()
         
         # Load connections from disk
         self.connections_data = self._load_connections()
@@ -124,6 +131,12 @@ class SSHConnectionService:
             # Get key fingerprint
             fingerprint = self._get_key_fingerprint(public_key_path)
             
+            # Capture and store the remote host key so subsequent SSH
+            # commands can use strict host key verification. Connection
+            # creation is an explicit administrator action, so trusting
+            # the host key at this point is a deliberate trust decision.
+            host_key_fingerprints = self._trust_host_key(host, port)
+            
             # Create connection record (password is NOT stored)
             connection = {
                 "id": connection_id,
@@ -134,6 +147,7 @@ class SSHConnectionService:
                 "private_key_path": str(private_key_path),
                 "public_key_path": str(public_key_path),
                 "fingerprint": fingerprint,
+                "host_key_fingerprints": host_key_fingerprints,
                 "created_at": datetime.now().isoformat(),
                 "last_used": None,
                 "last_tested": datetime.now().isoformat(),
@@ -583,6 +597,181 @@ class SSHConnectionService:
             logger.warning(f"Failed to get key fingerprint: {e}")
             return "Unknown"
     
+    # Host Key Trust Management
+    
+    def _trust_host_key(self, host: str, port: int) -> List[str]:
+        """
+        Retrieve the remote host keys with ssh-keyscan and store them in
+        the WebZFS-owned known_hosts file. Returns the fingerprints of the
+        stored keys.
+        
+        Existing entries for the same host are replaced so a deliberate
+        re-trust (connection re-creation) updates stale keys.
+        
+        Args:
+            host: Remote hostname or IP
+            port: SSH port
+            
+        Returns:
+            List of host key fingerprint strings (may be empty on failure)
+        """
+        try:
+            scan_cmd = ['ssh-keyscan', '-p', str(port), '-T', '10', host]
+            result = subprocess.run(
+                scan_cmd,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            key_lines = [
+                line for line in result.stdout.splitlines()
+                if line.strip() and not line.startswith('#')
+            ]
+            
+            if not key_lines:
+                logger.warning(f"ssh-keyscan returned no host keys for {host}:{port}")
+                return []
+            
+            # Remove any existing entries for this host, then append new ones
+            existing_lines = []
+            if self.known_hosts_file.exists():
+                host_token = f"[{host}]:{port}" if port != 22 else host
+                for line in self.known_hosts_file.read_text().splitlines():
+                    if line.strip() and not line.split()[0] == host_token:
+                        existing_lines.append(line)
+            
+            all_lines = existing_lines + key_lines
+            self.known_hosts_file.write_text('\n'.join(all_lines) + '\n')
+            os.chmod(self.known_hosts_file, 0o600)
+            
+            # Compute fingerprints for the stored keys
+            fingerprints = []
+            for line in key_lines:
+                try:
+                    fp_result = subprocess.run(
+                        ['ssh-keygen', '-lf', '-'],
+                        input=line + '\n',
+                        capture_output=True,
+                        text=True,
+                        timeout=10
+                    )
+                    if fp_result.returncode == 0:
+                        parts = fp_result.stdout.strip().split()
+                        if len(parts) >= 2:
+                            fingerprints.append(parts[1])
+                except Exception:
+                    pass
+            
+            logger.info(f"Stored {len(key_lines)} host key(s) for {host}:{port}")
+            return fingerprints
+            
+        except Exception as e:
+            logger.warning(f"Failed to capture host key for {host}:{port}: {e}")
+            return []
+    
+    def ensure_host_key_trusted(self, host: str, port: int) -> bool:
+        """
+        Ensure the known_hosts file contains an entry for the given host.
+        If missing, attempt to capture it via ssh-keyscan.
+        
+        Returns:
+            True if a host key entry exists after this call.
+        """
+        host_token = f"[{host}]:{port}" if port != 22 else host
+        if self.known_hosts_file.exists():
+            for line in self.known_hosts_file.read_text().splitlines():
+                if line.strip() and line.split()[0] == host_token:
+                    return True
+        return len(self._trust_host_key(host, port)) > 0
+    
+    def get_host_key_options(self) -> List[str]:
+        """
+        Get SSH -o option strings for strict host key verification using
+        the WebZFS-owned known_hosts file.
+        
+        Returns:
+            List of option strings, e.g.
+            ['StrictHostKeyChecking=yes', 'UserKnownHostsFile=/path']
+        """
+        return [
+            'StrictHostKeyChecking=yes',
+            f'UserKnownHostsFile={self.known_hosts_file}'
+        ]
+    
+    # Syncoid / Replication Integration
+    
+    def require_active_connection(self, connection_id: str) -> Dict[str, Any]:
+        """
+        Resolve a connection ID to a validated connection record.
+        
+        Validates that the connection exists and that its private key file
+        is a regular file inside the managed key directory.
+        
+        Args:
+            connection_id: Connection UUID
+            
+        Returns:
+            Connection record dictionary
+            
+        Raises:
+            Exception: If the connection or its key is invalid
+        """
+        conn = self.get_connection(connection_id)
+        if not conn:
+            raise Exception(f"SSH connection {connection_id} not found")
+        
+        key_path = Path(conn["private_key_path"]).resolve()
+        
+        # The key must live inside the managed key directory and be a
+        # regular file. This prevents key path injection via a tampered
+        # connections file.
+        if key_path.parent != self.keys_dir:
+            raise Exception(
+                f"Private key for connection '{conn['name']}' is outside the managed key directory"
+            )
+        if not key_path.is_file():
+            raise Exception(
+                f"Private key file for connection '{conn['name']}' is missing"
+            )
+        
+        return conn
+    
+    def build_syncoid_profile(self, connection_id: str) -> Dict[str, Any]:
+        """
+        Build an SSH profile for syncoid execution from a managed connection.
+        
+        All paths are absolute so the profile remains valid when syncoid is
+        executed under sudo where HOME differs from the webzfs account.
+        
+        Args:
+            connection_id: Connection UUID
+            
+        Returns:
+            Dictionary with keys:
+                host_string: 'user@host' for the syncoid source/target prefix
+                port: SSH port (int)
+                identity_file: absolute path to the managed private key
+                ssh_options: list of SSH -o option strings
+        """
+        conn = self.require_active_connection(connection_id)
+        
+        # Make sure the host key is trusted before handing the profile to
+        # syncoid, which runs with BatchMode and cannot prompt.
+        self.ensure_host_key_trusted(conn["host"], conn["port"])
+        
+        return {
+            "connection_id": conn["id"],
+            "connection_name": conn["name"],
+            "host_string": f"{conn['username']}@{conn['host']}",
+            "port": conn["port"],
+            "identity_file": str(Path(conn["private_key_path"]).resolve()),
+            "ssh_options": [
+                'IdentitiesOnly=yes',
+                'BatchMode=yes',
+            ] + self.get_host_key_options()
+        }
+    
     # Data Persistence Methods
     
     def _load_connections(self) -> Dict[str, Any]:
@@ -639,14 +828,18 @@ class SSHConnectionService:
         if not conn:
             raise Exception(f"Connection {connection_id} not found")
         
-        return [
+        # Ensure the host key is trusted so strict checking succeeds
+        self.ensure_host_key_trusted(conn["host"], conn["port"])
+        
+        args = [
             'ssh',
             '-i', conn["private_key_path"],
             '-p', str(conn["port"]),
-            '-o', 'StrictHostKeyChecking=no',
-            '-o', 'UserKnownHostsFile=/dev/null',
-            f'{conn["username"]}@{conn["host"]}'
         ]
+        for option in self.get_host_key_options():
+            args.extend(['-o', option])
+        args.append(f'{conn["username"]}@{conn["host"]}')
+        return args
     
     def get_ssh_client(self, connection_id: str) -> paramiko.SSHClient:
         """

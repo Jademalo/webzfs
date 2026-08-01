@@ -479,13 +479,44 @@ async def syncoid_execute(
     skip_parent: Annotated[bool, Form()] = False,
     create_bookmark: Annotated[bool, Form()] = False,
     force_delete: Annotated[bool, Form()] = False,
-    source_host: Annotated[str, Form()] = "",
-    target_host: Annotated[str, Form()] = "",
-    ssh_port: Annotated[int, Form()] = 22,
+    source_ssh_connection_id: Annotated[str, Form()] = "",
+    target_ssh_connection_id: Annotated[str, Form()] = "",
     dry_run: Annotated[bool, Form()] = False
 ):
-    """Execute syncoid replication"""
+    """Execute syncoid replication.
+
+    Remote endpoints are resolved server side from the selected SSH
+    Manager connection IDs. The managed connection record is the single
+    source of truth for username, host, port, and private key, so the
+    browser cannot override the SSH destination or identity (issue #195).
+    """
     try:
+        # Syncoid supports one global --sshkey and --sshport per command.
+        # Two different remote connections cannot be represented, so
+        # reject that topology explicitly instead of silently using one
+        # side's key for both.
+        if (
+            source_ssh_connection_id
+            and target_ssh_connection_id
+            and source_ssh_connection_id != target_ssh_connection_id
+        ):
+            raise Exception(
+                "Remote-to-remote replication between two different SSH "
+                "connections is not supported yet. One side must be Local, "
+                "or both sides must use the same SSH connection."
+            )
+
+        # Resolve the managed connection (if any) into an SSH profile
+        # containing user@host, port, key path, and strict host key options.
+        ssh_profile = None
+        active_connection_id = source_ssh_connection_id or target_ssh_connection_id
+        if active_connection_id:
+            ssh_profile = ssh_service.build_syncoid_profile(active_connection_id)
+            ssh_service.mark_connection_used(active_connection_id, 'replication')
+
+        source_host = ssh_profile['host_string'] if source_ssh_connection_id else None
+        target_host = ssh_profile['host_string'] if target_ssh_connection_id else None
+
         result = syncoid_service.execute_replication(
             source=source,
             target=target,
@@ -497,9 +528,11 @@ async def syncoid_execute(
             skip_parent=skip_parent,
             create_bookmark=create_bookmark,
             force_delete=force_delete,
-            source_host=source_host if source_host else None,
-            target_host=target_host if target_host else None,
-            ssh_port=ssh_port if ssh_port != 22 else None,
+            source_host=source_host,
+            target_host=target_host,
+            ssh_port=ssh_profile['port'] if ssh_profile and ssh_profile['port'] != 22 else None,
+            ssh_key=ssh_profile['identity_file'] if ssh_profile else None,
+            ssh_options=ssh_profile['ssh_options'] if ssh_profile else None,
             dry_run=dry_run
         )
         
@@ -619,17 +652,21 @@ async def test_remote_connection(data: Dict = Body(...)):
         
         # Get list of datasets from remote using key-based authentication
         try:
-            # Build the SSH command using the stored key
+            # Build the SSH command using the stored key and the
+            # WebZFS-owned known_hosts database for strict verification
+            ssh_service.ensure_host_key_trusted(connection['host'], connection['port'])
             ssh_cmd = [
                 'ssh',
                 '-i', connection['private_key_path'],
                 '-p', str(connection['port']),
-                '-o', 'StrictHostKeyChecking=no',
-                '-o', 'UserKnownHostsFile=/dev/null',
                 '-o', 'BatchMode=yes',
+            ]
+            for ssh_option in ssh_service.get_host_key_options():
+                ssh_cmd.extend(['-o', ssh_option])
+            ssh_cmd.extend([
                 f"{connection['username']}@{connection['host']}",
                 'zfs', 'list', '-H', '-o', 'name'
-            ]
+            ])
             
             process = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=30)
             
@@ -719,17 +756,20 @@ async def get_remote_datasets(data: Dict = Body(...)):
         
         # Get list of datasets from remote using key-based authentication
         try:
+            ssh_service.ensure_host_key_trusted(connection['host'], connection['port'])
             ssh_cmd = [
                 'ssh',
                 '-i', connection['private_key_path'],
                 '-p', str(connection['port']),
-                '-o', 'StrictHostKeyChecking=no',
-                '-o', 'UserKnownHostsFile=/dev/null',
                 '-o', 'BatchMode=yes',
                 '-o', 'ConnectTimeout=10',
+            ]
+            for ssh_option in ssh_service.get_host_key_options():
+                ssh_cmd.extend(['-o', ssh_option])
+            ssh_cmd.extend([
                 f"{connection['username']}@{connection['host']}",
                 'zfs', 'list', '-H', '-o', 'name'
-            ]
+            ])
             
             process = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=30)
             
