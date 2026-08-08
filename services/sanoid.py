@@ -2,12 +2,15 @@
 Sanoid Configuration Management Service
 Manages sanoid configuration for automated ZFS snapshot scheduling
 """
+import io
+import os
 import subprocess
 import configparser
 from typing import Dict, List, Any, Optional
 from pathlib import Path
 
-from services.utils import run_privileged_command, is_freebsd, is_bsd
+from services.utils import run_privileged_command, is_freebsd, is_bsd, is_linux
+from services.file import save_file
 
 
 class SanoidService:
@@ -16,10 +19,12 @@ class SanoidService:
     # Platform-aware config paths
     # FreeBSD/BSD: pkg installs to /usr/local/etc/sanoid/
     # Linux: packages install to /etc/sanoid/
+    # Note: Debian's sanoid package does not create /etc/sanoid/ or
+    # sanoid.conf. The defaults file lives at
+    # /usr/share/sanoid/sanoid.defaults.conf and is used directly by the
+    # packaged sanoid executable, so WebZFS does not need to manage it.
     SANOID_CONF_LINUX = "/etc/sanoid/sanoid.conf"
     SANOID_CONF_BSD = "/usr/local/etc/sanoid/sanoid.conf"
-    SANOID_DEFAULTS_LINUX = "/etc/sanoid/sanoid.defaults.conf"
-    SANOID_DEFAULTS_BSD = "/usr/local/etc/sanoid/sanoid.defaults.conf"
     
     # Common paths where sanoid might be installed
     COMMON_PATHS = [
@@ -32,12 +37,64 @@ class SanoidService:
     def __init__(self):
         if is_bsd():
             self.config_path = Path(self.SANOID_CONF_BSD)
-            self.defaults_path = Path(self.SANOID_DEFAULTS_BSD)
         else:
             self.config_path = Path(self.SANOID_CONF_LINUX)
-            self.defaults_path = Path(self.SANOID_DEFAULTS_LINUX)
         
         self.sanoid_path = self._find_sanoid_path()
+    
+    def _write_config(self, config: configparser.ConfigParser) -> None:
+        """
+        Safely write the sanoid configuration file.
+        
+        Renders the configuration to a string, validates it by re-parsing,
+        then writes it. If the config file or its parent directory is not
+        directly writable (fresh Debian installs have no /etc/sanoid at
+        all, and the file is normally root-owned), the write goes through
+        the privileged path in services/file.py which uses sudo mkdir and
+        sudo tee. Those commands are already granted to the webzfs user
+        in the Linux sudoers configuration.
+        
+        Args:
+            config: The ConfigParser object to write
+        
+        Raises:
+            Exception: If the rendered configuration fails validation
+                or the write fails. The existing config file is never
+                touched unless validation succeeds.
+        """
+        # Render to a string first so nothing touches disk on failure
+        buffer = io.StringIO()
+        config.write(buffer)
+        content = buffer.getvalue()
+        
+        # Validate the rendered content before replacing the live config
+        validation_parser = configparser.ConfigParser()
+        try:
+            validation_parser.read_string(content)
+        except configparser.Error as e:
+            raise Exception(f"Generated configuration failed validation: {str(e)}")
+        
+        # Determine whether a direct write is possible
+        config_file = str(self.config_path)
+        parent_dir = self.config_path.parent
+        if self.config_path.exists():
+            directly_writable = os.access(config_file, os.W_OK)
+        else:
+            directly_writable = parent_dir.is_dir() and os.access(str(parent_dir), os.W_OK)
+        
+        if directly_writable:
+            with open(config_file, 'w') as f:
+                f.write(content)
+        elif is_linux():
+            # Privileged write path: sudo mkdir -p + sudo tee.
+            # Creates /etc/sanoid and sanoid.conf root-owned without
+            # making them writable by the webzfs user.
+            save_file(config_file, content, use_sudo=True)
+        else:
+            raise Exception(
+                f"Cannot write {config_file}: permission denied and no "
+                "privileged write path is available on this platform"
+            )
     
     def _find_sanoid_path(self) -> Optional[str]:
         """
@@ -150,9 +207,7 @@ class SanoidService:
             for key, value in kwargs.items():
                 config.set(dataset_name, key, str(value))
             
-            # Write back to file
-            with open(self.config_path, 'w') as f:
-                config.write(f)
+            self._write_config(config)
                 
         except Exception as e:
             raise Exception(f"Failed to add dataset: {str(e)}")
@@ -175,8 +230,7 @@ class SanoidService:
             for key, value in settings.items():
                 config.set(dataset_name, key, str(value))
             
-            with open(self.config_path, 'w') as f:
-                config.write(f)
+            self._write_config(config)
                 
         except Exception as e:
             raise Exception(f"Failed to update dataset: {str(e)}")
@@ -197,8 +251,7 @@ class SanoidService:
             
             config.remove_section(dataset_name)
             
-            with open(self.config_path, 'w') as f:
-                config.write(f)
+            self._write_config(config)
                 
         except Exception as e:
             raise Exception(f"Failed to remove dataset: {str(e)}")
@@ -225,8 +278,7 @@ class SanoidService:
             for key, value in settings.items():
                 config.set(section_name, key, str(value))
             
-            with open(self.config_path, 'w') as f:
-                config.write(f)
+            self._write_config(config)
                 
         except Exception as e:
             raise Exception(f"Failed to create template: {str(e)}")
@@ -252,8 +304,7 @@ class SanoidService:
             for key, value in settings.items():
                 config.set(section_name, key, str(value))
             
-            with open(self.config_path, 'w') as f:
-                config.write(f)
+            self._write_config(config)
                 
         except Exception as e:
             raise Exception(f"Failed to update template: {str(e)}")
@@ -276,8 +327,7 @@ class SanoidService:
             
             config.remove_section(section_name)
             
-            with open(self.config_path, 'w') as f:
-                config.write(f)
+            self._write_config(config)
                 
         except Exception as e:
             raise Exception(f"Failed to delete template: {str(e)}")
