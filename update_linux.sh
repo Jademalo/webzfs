@@ -87,6 +87,48 @@ chown -R "$WEBZFS_USER:$WEBZFS_USER" "$INSTALL_DIR"
 echo -e "${GREEN}✓${NC} Application files updated"
 echo
 
+# Pre-create JSON data files that newer versions introduced.
+#
+# FileStorageService and SMARTMonitoringService create these on first
+# import if missing, but several Gunicorn workers import at the same
+# moment during a restart and can race each other writing the same new
+# file. Creating them here, before the service is restarted, means the
+# workers only ever read files that already exist. This mirrors the same
+# block in install_linux.sh and is why an update must touch data files
+# at all.
+DATA_DIR="${INSTALL_DIR}/.config/webzfs"
+mkdir -p "${DATA_DIR}/progress"
+mkdir -p "${DATA_DIR}/logs"
+
+if [ ! -f "${DATA_DIR}/replication_history.json" ]; then
+    echo '{"executions": [], "next_id": 1}' > "${DATA_DIR}/replication_history.json"
+fi
+if [ ! -f "${DATA_DIR}/notification_log.json" ]; then
+    echo '{"notifications": []}' > "${DATA_DIR}/notification_log.json"
+fi
+if [ ! -f "${DATA_DIR}/syncoid_jobs.json" ]; then
+    echo '{"jobs": [], "next_id": 1}' > "${DATA_DIR}/syncoid_jobs.json"
+fi
+if [ ! -f "${DATA_DIR}/scrub_schedules.json" ]; then
+    echo '{"schedules": [], "next_id": 1}' > "${DATA_DIR}/scrub_schedules.json"
+fi
+if [ ! -f "${DATA_DIR}/smart_test_history.json" ]; then
+    echo '{"history": []}' > "${DATA_DIR}/smart_test_history.json"
+fi
+if [ ! -f "${DATA_DIR}/smart_scheduled_tests.json" ]; then
+    echo '{}' > "${DATA_DIR}/smart_scheduled_tests.json"
+fi
+if [ ! -f "${DATA_DIR}/health_reports.json" ]; then
+    echo '{"reports": []}' > "${DATA_DIR}/health_reports.json"
+fi
+if [ ! -f "${DATA_DIR}/health_schedules.json" ]; then
+    echo '{"schedules": [], "next_id": 1}' > "${DATA_DIR}/health_schedules.json"
+fi
+
+chown -R "$WEBZFS_USER:$WEBZFS_USER" "$DATA_DIR"
+echo -e "${GREEN}✓${NC} Data files verified"
+echo
+
 # Refresh sudo permissions so new privileged commands (for example grep and
 # dmesg used by the support bundle log collectors) are whitelisted on existing
 # installations. Writing the file on every update keeps it in sync with the
@@ -118,6 +160,22 @@ webzfs ALL=(ALL) NOPASSWD: /usr/bin/systemctl, /bin/systemctl
 
 # Crontab editing
 webzfs ALL=(ALL) NOPASSWD: /usr/bin/crontab
+
+# Scheduled syncoid job timers.
+# Unit files are created and edited with "sudo tee" (covered by the
+# general tee entry below) and enabled/disabled/reloaded with
+# "sudo systemctl" (covered by the systemctl entry above). The explicit
+# tee entries here document that intent and keep timer management
+# working even if the general tee entry is ever narrowed. rm is
+# restricted to WebZFS-owned unit files only.
+webzfs ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/webzfs-syncoid-job-*, /bin/tee /etc/systemd/system/webzfs-syncoid-job-*
+webzfs ALL=(ALL) NOPASSWD: /usr/bin/rm -f /etc/systemd/system/webzfs-syncoid-job-*, /bin/rm -f /etc/systemd/system/webzfs-syncoid-job-*
+
+# Unified Scheduling Hub timers. All scheduled task types (scrub, SMART
+# self-test, health check, and replication) use the webzfs-task-* unit
+# naming scheme managed by services/job_scheduler.py.
+webzfs ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/webzfs-task-*, /bin/tee /etc/systemd/system/webzfs-task-*
+webzfs ALL=(ALL) NOPASSWD: /usr/bin/rm -f /etc/systemd/system/webzfs-task-*, /bin/rm -f /etc/systemd/system/webzfs-task-*
 
 # File editing (for config files like smartd.conf, sanoid.conf)
 webzfs ALL=(ALL) NOPASSWD: /usr/bin/cat, /usr/bin/tee, /usr/bin/mkdir

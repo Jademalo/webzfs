@@ -1,0 +1,87 @@
+{% extends "layout.jinja" %}
+
+{% set active_page = 'utils' %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8 max-w-4xl">
+    <!-- Breadcrumb Navigation -->
+    <nav class="text-sm mb-6 text-text-tertiary">
+        <a href="/utils" class="hover:text-primary-400">Utilities</a>
+        <span class="mx-2">/</span>
+        <a href="/utils/scheduling" class="hover:text-primary-400">Scheduling</a>
+        <span class="mx-2">/</span>
+        <span class="text-text-primary">{% if task %}Edit SMART Test Schedule{% else %}New SMART Test Schedule{% endif %}</span>
+    </nav>
+
+    <!-- Page Header -->
+    <div class="mb-6">
+        <h1 class="text-3xl font-bold text-text-primary mb-2">
+            {% if task %}Edit SMART Test Schedule{% else %}New SMART Test Schedule{% endif %}
+        </h1>
+        <p class="text-text-secondary text-sm">
+            Starts a SMART self-test on the selected disk. The schedule is registered with the operating system scheduler as soon as it is saved.
+        </p>
+    </div>
+
+    <div class="card mb-6">
+        <div class="card-body">
+            <form method="post" action="/utils/scheduling/save">
+                <input type="hidden" name="task_type" value="smart">
+                {% if task %}
+                <input type="hidden" name="task_id" value="{{ task.id }}">
+                {% endif %}
+
+                <div class="mb-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="form-label" for="disk">Disk</label>
+                        <select name="disk" id="disk" class="form-select" required>
+                            <option value="">Select a disk...</option>
+                            <!-- All disks is one schedule covering the whole
+                                 fleet, so 20 disks do not need 20 tasks. -->
+                            <option value="{{ all_disks_value }}" {% if task and task.disk == all_disks_value %}selected{% endif %}>All disks ({{ disks|length }} present)</option>
+                            {% for disk in disks %}
+                            <option value="{{ disk }}" {% if task and task.disk == disk %}selected{% endif %}>{{ disk }}</option>
+                            {% endfor %}
+                        </select>
+                        <p class="text-text-tertiary text-xs mt-1">
+                            All disks resolves the disk list each time the task runs, so disks added later are covered automatically.
+                        </p>
+                        {% if task and task.disk and task.disk != all_disks_value and task.disk not in disks %}
+                        <p class="text-warning-400 text-xs mt-1">
+                            The disk this schedule refers to ({{ task.disk }}) is not currently present.
+                        </p>
+                        {% endif %}
+                    </div>
+                    <div>
+                        <label class="form-label" for="test_type">Test Type</label>
+                        <select name="test_type" id="test_type" class="form-select">
+                            <option value="short" {% if task and task.test_type == 'short' %}selected{% endif %}>Short (a few minutes)</option>
+                            <option value="long" {% if task and task.test_type == 'long' %}selected{% endif %}>Long (hours)</option>
+                        </select>
+                    </div>
+                </div>
+
+                {% include 'utils/scheduling/schedule_fields.jinja' %}
+
+                <div class="flex items-center justify-between pt-4 border-t border-border-subtle">
+                    <button type="submit" class="btn-primary">
+                        {% if task %}Save Changes{% else %}Create Schedule{% endif %}
+                    </button>
+                    <a href="/utils/scheduling" class="btn-secondary">Cancel</a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="card-nested bg-info-900/20 border-info-700">
+        <h3 class="font-semibold mb-2 text-text-primary">About SMART test schedules</h3>
+        <ul class="space-y-1 text-sm text-text-secondary">
+            <li>A common pattern is a short test weekly and a long test monthly, as two separate schedules.</li>
+            <li>Choose All disks for fleet-wide coverage from a single task, or pick one disk when it needs its own schedule.</li>
+            <li>An All disks run starts a test on every disk at once. If some disks fail to start, the task is recorded as partial rather than failed.</li>
+            <li>The disk stays usable during a self-test, but a long test adds noticeable latency on busy disks.</li>
+            <li>Results appear on the <a href="/utils/smart" class="text-primary-400 hover:text-primary-300">SMART Monitoring</a> page once the test completes.</li>
+        </ul>
+    </div>
+</div>
+{% endblock %}

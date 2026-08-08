@@ -1,0 +1,63 @@
+{% extends "layout.jinja" %}
+
+{% set active_page = 'utils' %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <!-- Breadcrumb Navigation -->
+    <nav class="text-sm mb-6 text-text-tertiary">
+        <a href="/utils" class="hover:text-primary-400">Utilities</a>
+        <span class="mx-2">/</span>
+        <span class="text-text-primary">Scrub Status</span>
+    </nav>
+
+    <!-- Page Header -->
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-3xl font-bold text-text-primary">Scrub Status</h1>
+        <div class="space-x-2">
+            <a href="/utils/scheduling" class="btn-primary px-4 py-2 inline-block">
+                Scrub Schedules
+            </a>
+            <a href="/utils/scheduling/scrub/new" class="bg-blue-600 hover:bg-blue-700 text-text-primary px-4 py-2 rounded inline-block">
+                Add Schedule
+            </a>
+        </div>
+    </div>
+
+    <!-- Success/Error Messages -->
+    {% if request.query_params.get('message') %}
+    <div class="bg-success-900/30 border-2 border-success-500/50 text-success-400 px-4 py-3 rounded mb-4">
+        {{ request.query_params.get('message') }}
+    </div>
+    {% endif %}
+
+    {% if request.query_params.get('error') %}
+    <div class="bg-danger-900/30 border-2 border-danger-500/50 text-danger-400 px-4 py-3 rounded mb-4">
+        <strong>Error:</strong> {{ request.query_params.get('error') }}
+    </div>
+    {% endif %}
+
+    <!-- HTMX deferred loading: zpool status runs per pool and can be slow -->
+    <div id="scrub-status-container"
+         hx-get="/utils/scrub/content-partial"
+         hx-trigger="load"
+         hx-swap="innerHTML">
+        <div class="flex flex-col items-center justify-center py-16">
+            <svg class="animate-spin h-10 w-10 text-primary-400 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <p class="text-text-secondary text-lg">Reading pool scrub status...</p>
+            <p class="text-text-tertiary text-sm mt-1">Querying every imported pool, this may take a moment.</p>
+        </div>
+    </div>
+
+    <!-- Info Box -->
+    <div class="mt-6 bg-info-900/30 border-2 border-info-500/50 text-info-400 px-4 py-3 rounded">
+        <strong><svg class="w-5 h-5 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg> About Scrubs:</strong>
+        <p class="mt-1 text-sm">A scrub reads every block in the pool and verifies it against its checksum, repairing damage from redundant copies where possible. OpenZFS recommends scrubbing consumer-grade disks monthly and enterprise-grade disks quarterly. Schedules created here are registered with the operating system scheduler, so they run whether or not WebZFS is open in a browser.</p>
+    </div>
+</div>
+{% endblock %}

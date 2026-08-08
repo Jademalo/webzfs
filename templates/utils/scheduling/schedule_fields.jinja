@@ -1,0 +1,83 @@
+{# Shared schedule fields for the per-type scheduling forms.
+
+   Expects: task (record or none), schedule_presets.
+   The including form must already contain the hidden task_type field.
+#}
+
+<div class="mb-6">
+    <h3 class="font-semibold text-lg mb-4 text-text-primary">Schedule</h3>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+            <label class="form-label" for="schedule_preset">Preset</label>
+            <select id="schedule_preset" class="form-select">
+                <option value="">Custom</option>
+                {% for preset in schedule_presets %}
+                <option value="{{ preset.expression }}" {% if task and task.schedule == preset.expression %}selected{% endif %}>{{ preset.label }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label class="form-label" for="schedule">Cron Expression</label>
+            <input type="text" name="schedule" id="schedule" required class="form-input"
+                   value="{{ task.schedule if task else '0 2 * * 0' }}" placeholder="0 2 * * 0">
+            <p id="schedule-status" class="text-text-tertiary text-xs mt-1">minute hour day month weekday (local time)</p>
+        </div>
+    </div>
+    <div id="next-runs" class="hidden mt-3 bg-bg-elevated-3 border border-border-default rounded-lg px-4 py-3 text-sm text-text-secondary"></div>
+    <label class="flex items-center mt-4">
+        <input type="checkbox" name="enabled" value="true" class="form-checkbox"
+               {% if not task or task.enabled %}checked{% endif %}>
+        <span class="ml-3 text-text-secondary">Enabled (task runs on schedule)</span>
+    </label>
+</div>
+
+<script>
+(function() {
+    const presetSelect = document.getElementById('schedule_preset');
+    const scheduleInput = document.getElementById('schedule');
+    const scheduleStatus = document.getElementById('schedule-status');
+    const nextRunsBox = document.getElementById('next-runs');
+    let validateTimer = null;
+
+    async function validateSchedule() {
+        const expression = scheduleInput.value.trim();
+        if (!expression) { return; }
+        try {
+            const response = await fetch('/utils/scheduling/validate-schedule', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ schedule: expression })
+            });
+            const data = await response.json();
+            if (data.valid) {
+                scheduleStatus.textContent = 'Valid schedule';
+                scheduleStatus.className = 'text-success-400 text-xs mt-1';
+                nextRunsBox.classList.remove('hidden');
+                nextRunsBox.innerHTML = '<strong class="text-text-primary">Next runs:</strong> '
+                    + data.next_runs.join(', ');
+            } else {
+                scheduleStatus.textContent = data.error || 'Invalid schedule';
+                scheduleStatus.className = 'text-danger-400 text-xs mt-1';
+                nextRunsBox.classList.add('hidden');
+            }
+        } catch (err) {
+            scheduleStatus.textContent = 'Could not validate schedule';
+            scheduleStatus.className = 'text-warning-400 text-xs mt-1';
+        }
+    }
+
+    presetSelect.addEventListener('change', function() {
+        if (this.value) {
+            scheduleInput.value = this.value;
+            validateSchedule();
+        }
+    });
+
+    scheduleInput.addEventListener('input', function() {
+        clearTimeout(validateTimer);
+        validateTimer = setTimeout(validateSchedule, 500);
+    });
+
+    validateSchedule();
+})();
+</script>

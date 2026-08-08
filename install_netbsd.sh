@@ -384,22 +384,21 @@ fi
 if [ ! -f "${DATA_DIR}/health_reports.json" ]; then
     echo '{"reports": []}' > "${DATA_DIR}/health_reports.json"
 fi
+if [ ! -f "${DATA_DIR}/health_schedules.json" ]; then
+    echo '{"schedules": [], "next_id": 1}' > "${DATA_DIR}/health_schedules.json"
+fi
 
 printf "${GREEN}✓${NC} Data directory and files created\n"
 
-# Also create data directory in root's home (since gunicorn runs as root)
-# This prevents FileNotFoundError during module import when workers initialize
-ROOT_DATA_DIR="/root/.config/webzfs"
-if [ ! -d "$ROOT_DATA_DIR" ]; then
-    echo "Creating root user data directory: $ROOT_DATA_DIR"
-    mkdir -p "$ROOT_DATA_DIR"
-    # Pre-create scrub_schedules.json to avoid race condition on first import
-    if [ ! -f "${ROOT_DATA_DIR}/scrub_schedules.json" ]; then
-        echo '{"schedules": [], "next_id": 1}' > "${ROOT_DATA_DIR}/scrub_schedules.json"
-    fi
-    printf "${GREEN}✓${NC} Root user data directory created\n"
-fi
-echo
+# Note: earlier versions also seeded /root/.config/webzfs here, because
+# WebZFS runs as root on NetBSD and an unset HOME made
+# FileStorageService fall back to root's home (see
+# memory-bank/NETBSD_SCRUB_SCHEDULES_FIX.md). That workaround is no
+# longer needed. Every way of starting WebZFS now sets HOME to the
+# install prefix: the rc.d wrapper, run.sh, and the scheduled task
+# crontab entries. Seeding two directories only invited the two from
+# drifting apart, with the web interface and scheduled tasks reading
+# different files.
 
 # Download pre-compiled wheels
 echo "Downloading pre-compiled wheels..."

@@ -351,6 +351,9 @@ fi
 if [ ! -f "${DATA_DIR}/health_reports.json" ]; then
     echo '{"reports": []}' > "${DATA_DIR}/health_reports.json"
 fi
+if [ ! -f "${DATA_DIR}/health_schedules.json" ]; then
+    echo '{"schedules": [], "next_id": 1}' > "${DATA_DIR}/health_schedules.json"
+fi
 
 printf "${GREEN}✓${NC} Data directory and files created\n"
 echo

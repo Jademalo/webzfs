@@ -4,6 +4,7 @@ Provides simple data persistence using JSON files and log files
 No external dependencies - uses only Python standard library
 """
 import json
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from datetime import datetime
@@ -33,10 +34,34 @@ class FileStorageService:
         self.notifications_file = self.data_dir / 'notification_log.json'
         self.log_file = self.data_dir / 'webzfs.log'
         self.syncoid_jobs_file = self.data_dir / 'syncoid_jobs.json'
+        self.scrub_schedules_file = self.data_dir / 'scrub_schedules.json'
+        self.health_schedules_file = self.data_dir / 'health_schedules.json'
         
         self._lock = threading.Lock()
         self._ensure_data_directory()
+        # Cross-process lock file. Web workers and the scheduled job
+        # runner (a separate process launched by systemd/cron) all
+        # perform read-modify-write cycles on the JSON files, so a
+        # threading.Lock alone is not sufficient (issue #194).
+        self._lock_file = self.data_dir / 'storage.lock'
         self._initialize_files()
+
+    @contextmanager
+    def _interprocess_lock(self):
+        """Acquire an exclusive advisory lock shared across processes.
+
+        Uses fcntl.flock on a dedicated lock file so multiple Gunicorn
+        workers and the syncoid job runner serialize read-modify-write
+        cycles on the JSON data files. fcntl is available on Linux,
+        FreeBSD, and NetBSD.
+        """
+        import fcntl
+        with open(self._lock_file, 'a') as lock_handle:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
     
     def _ensure_data_directory(self) -> None:
         """Ensure the data directory exists"""
@@ -53,6 +78,12 @@ class FileStorageService:
         
         if not self.syncoid_jobs_file.exists():
             self._write_json(self.syncoid_jobs_file, {'jobs': [], 'next_id': 1})
+        
+        if not self.scrub_schedules_file.exists():
+            self._write_json(self.scrub_schedules_file, {'schedules': [], 'next_id': 1})
+        
+        if not self.health_schedules_file.exists():
+            self._write_json(self.health_schedules_file, {'schedules': [], 'next_id': 1})
     
     def _read_json(self, file_path: Path) -> Dict[str, Any]:
         """Read JSON file with error handling"""
@@ -113,7 +144,7 @@ class FileStorageService:
         Returns:
             execution_id: ID of created execution record
         """
-        with self._lock:
+        with self._lock, self._interprocess_lock():
             data = self._read_json(self.history_file)
             
             execution_id = data.get('next_id', 1)
@@ -160,7 +191,7 @@ class FileStorageService:
         log_output: Optional[str] = None
     ) -> None:
         """Update an execution record"""
-        with self._lock:
+        with self._lock, self._interprocess_lock():
             data = self._read_json(self.history_file)
             
             for execution in data.get('executions', []):
@@ -440,15 +471,21 @@ class FileStorageService:
         target_bwlimit: Optional[str] = None,
         skip_parent: bool = False,
         create_bookmark: bool = False,
-        force_delete: bool = False
+        force_delete: bool = False,
+        ssh_connection_id: Optional[str] = None,
+        replication_type: str = 'local'
     ) -> int:
         """
         Create a new syncoid scheduled job
-        
+
+        The SSH Manager connection ID is stored rather than resolved
+        host/key details so the managed connection record remains the
+        single source of truth at execution time (issues #194, #195).
+
         Returns:
             job_id: ID of created job
         """
-        with self._lock:
+        with self._lock, self._interprocess_lock():
             data = self._read_json(self.syncoid_jobs_file)
             
             job_id = data.get('next_id', 1)
@@ -471,6 +508,8 @@ class FileStorageService:
                 'skip_parent': skip_parent,
                 'create_bookmark': create_bookmark,
                 'force_delete': force_delete,
+                'ssh_connection_id': ssh_connection_id,
+                'replication_type': replication_type,
                 'last_run': None,
                 'last_status': None,
                 'next_run': None,
@@ -530,10 +569,12 @@ class FileStorageService:
         target_bwlimit: Optional[str] = None,
         skip_parent: Optional[bool] = None,
         create_bookmark: Optional[bool] = None,
-        force_delete: Optional[bool] = None
+        force_delete: Optional[bool] = None,
+        ssh_connection_id: Optional[str] = None,
+        replication_type: Optional[str] = None
     ) -> bool:
         """Update an existing syncoid job"""
-        with self._lock:
+        with self._lock, self._interprocess_lock():
             data = self._read_json(self.syncoid_jobs_file)
             
             for job in data.get('jobs', []):
@@ -570,6 +611,11 @@ class FileStorageService:
                         job['create_bookmark'] = create_bookmark
                     if force_delete is not None:
                         job['force_delete'] = force_delete
+                    if ssh_connection_id is not None:
+                        # Empty string clears the connection (local job)
+                        job['ssh_connection_id'] = ssh_connection_id or None
+                    if replication_type is not None:
+                        job['replication_type'] = replication_type
                     
                     job['updated_at'] = datetime.now().isoformat()
                     
@@ -587,7 +633,7 @@ class FileStorageService:
         next_run: Optional[str] = None
     ) -> bool:
         """Update job execution status"""
-        with self._lock:
+        with self._lock, self._interprocess_lock():
             data = self._read_json(self.syncoid_jobs_file)
             
             for job in data.get('jobs', []):
@@ -606,7 +652,7 @@ class FileStorageService:
     
     def delete_syncoid_job(self, job_id: int) -> bool:
         """Delete a syncoid job"""
-        with self._lock:
+        with self._lock, self._interprocess_lock():
             data = self._read_json(self.syncoid_jobs_file)
             
             jobs = data.get('jobs', [])
@@ -617,6 +663,317 @@ class FileStorageService:
             if len(data['jobs']) < original_length:
                 self._write_json(self.syncoid_jobs_file, data)
                 self._write_log(f"Deleted syncoid job #{job_id}")
+                return True
+            
+            return False
+    
+    # Scrub Schedule Methods
+    #
+    # Moved out of views/utils_scrub.py for the Unified Scheduling Hub so
+    # the schedule store shares the interprocess lock with the task
+    # runner process. The file name and record shape are unchanged;
+    # last_run, last_status, and next_run were added.
+    
+    def create_scrub_schedule(
+        self,
+        pool: str,
+        schedule: str,
+        enabled: bool = True
+    ) -> int:
+        """
+        Create a new pool scrub schedule
+        
+        Args:
+            pool: ZFS pool name to scrub
+            schedule: 5-field cron expression
+            enabled: Whether the schedule runs
+        
+        Returns:
+            schedule_id: ID of created schedule
+        """
+        with self._lock, self._interprocess_lock():
+            data = self._read_json(self.scrub_schedules_file)
+            
+            schedule_id = data.get('next_id', 1)
+            
+            record = {
+                'id': schedule_id,
+                'pool': pool,
+                'schedule': schedule,
+                'enabled': enabled,
+                'last_run': None,
+                'last_status': None,
+                'next_run': None,
+                'created_at': datetime.now().isoformat(),
+                'updated_at': datetime.now().isoformat()
+            }
+            
+            if 'schedules' not in data:
+                data['schedules'] = []
+            
+            data['schedules'].append(record)
+            data['next_id'] = schedule_id + 1
+            
+            self._write_json(self.scrub_schedules_file, data)
+            self._write_log(f"Created scrub schedule #{schedule_id} for pool {pool}")
+            
+            return schedule_id
+    
+    def get_scrub_schedules(self, enabled_only: bool = False) -> List[Dict[str, Any]]:
+        """Get all scrub schedules"""
+        data = self._read_json(self.scrub_schedules_file)
+        schedules = data.get('schedules', [])
+        
+        if enabled_only:
+            schedules = [s for s in schedules if s.get('enabled', True)]
+        
+        schedules.sort(key=lambda x: x.get('pool', ''))
+        
+        return schedules
+    
+    def get_scrub_schedule(self, schedule_id: int) -> Optional[Dict[str, Any]]:
+        """Get a specific scrub schedule"""
+        data = self._read_json(self.scrub_schedules_file)
+        
+        for record in data.get('schedules', []):
+            if record['id'] == schedule_id:
+                return record
+        
+        return None
+    
+    def update_scrub_schedule(
+        self,
+        schedule_id: int,
+        pool: Optional[str] = None,
+        schedule: Optional[str] = None,
+        enabled: Optional[bool] = None
+    ) -> bool:
+        """Update an existing scrub schedule"""
+        with self._lock, self._interprocess_lock():
+            data = self._read_json(self.scrub_schedules_file)
+            
+            for record in data.get('schedules', []):
+                if record['id'] == schedule_id:
+                    if pool is not None:
+                        record['pool'] = pool
+                    if schedule is not None:
+                        record['schedule'] = schedule
+                    if enabled is not None:
+                        record['enabled'] = enabled
+                    
+                    record['updated_at'] = datetime.now().isoformat()
+                    
+                    self._write_json(self.scrub_schedules_file, data)
+                    self._write_log(f"Updated scrub schedule #{schedule_id}")
+                    return True
+            
+            return False
+    
+    def update_scrub_schedule_status(
+        self,
+        schedule_id: int,
+        last_run: Optional[str] = None,
+        last_status: Optional[str] = None,
+        next_run: Optional[str] = None
+    ) -> bool:
+        """Update scrub schedule execution status"""
+        with self._lock, self._interprocess_lock():
+            data = self._read_json(self.scrub_schedules_file)
+            
+            for record in data.get('schedules', []):
+                if record['id'] == schedule_id:
+                    if last_run is not None:
+                        record['last_run'] = last_run
+                    if last_status is not None:
+                        record['last_status'] = last_status
+                    if next_run is not None:
+                        record['next_run'] = next_run
+                    
+                    self._write_json(self.scrub_schedules_file, data)
+                    return True
+            
+            return False
+    
+    def delete_scrub_schedule(self, schedule_id: int) -> bool:
+        """Delete a scrub schedule"""
+        with self._lock, self._interprocess_lock():
+            data = self._read_json(self.scrub_schedules_file)
+            
+            schedules = data.get('schedules', [])
+            original_length = len(schedules)
+            
+            data['schedules'] = [s for s in schedules if s['id'] != schedule_id]
+            
+            if len(data['schedules']) < original_length:
+                self._write_json(self.scrub_schedules_file, data)
+                self._write_log(f"Deleted scrub schedule #{schedule_id}")
+                return True
+            
+            return False
+    
+    # Health Check Schedule Methods
+    
+    def create_health_schedule(
+        self,
+        name: str,
+        schedule: str,
+        enabled: bool = True,
+        check_disk_health: bool = True,
+        check_smart_tests: bool = True,
+        check_scrubs: bool = True,
+        aggressive_hours: bool = False
+    ) -> int:
+        """
+        Create a new health check schedule
+        
+        Args:
+            name: Human-readable schedule name
+            schedule: 5-field cron expression
+            enabled: Whether the schedule runs
+            check_disk_health: Include disk health checks
+            check_smart_tests: Include SMART test verification
+            check_scrubs: Include scrub verification
+            aggressive_hours: Use aggressive power-on hour thresholds
+        
+        Returns:
+            schedule_id: ID of created schedule
+        """
+        with self._lock, self._interprocess_lock():
+            data = self._read_json(self.health_schedules_file)
+            
+            schedule_id = data.get('next_id', 1)
+            
+            record = {
+                'id': schedule_id,
+                'name': name,
+                'schedule': schedule,
+                'enabled': enabled,
+                'check_disk_health': check_disk_health,
+                'check_smart_tests': check_smart_tests,
+                'check_scrubs': check_scrubs,
+                'aggressive_hours': aggressive_hours,
+                'last_run': None,
+                'last_status': None,
+                'last_report_id': None,
+                'next_run': None,
+                'created_at': datetime.now().isoformat(),
+                'updated_at': datetime.now().isoformat()
+            }
+            
+            if 'schedules' not in data:
+                data['schedules'] = []
+            
+            data['schedules'].append(record)
+            data['next_id'] = schedule_id + 1
+            
+            self._write_json(self.health_schedules_file, data)
+            self._write_log(f"Created health schedule #{schedule_id}: {name}")
+            
+            return schedule_id
+    
+    def get_health_schedules(self, enabled_only: bool = False) -> List[Dict[str, Any]]:
+        """Get all health check schedules"""
+        data = self._read_json(self.health_schedules_file)
+        schedules = data.get('schedules', [])
+        
+        if enabled_only:
+            schedules = [s for s in schedules if s.get('enabled', True)]
+        
+        schedules.sort(key=lambda x: x.get('name', ''))
+        
+        return schedules
+    
+    def get_health_schedule(self, schedule_id: int) -> Optional[Dict[str, Any]]:
+        """Get a specific health check schedule"""
+        data = self._read_json(self.health_schedules_file)
+        
+        for record in data.get('schedules', []):
+            if record['id'] == schedule_id:
+                return record
+        
+        return None
+    
+    def update_health_schedule(
+        self,
+        schedule_id: int,
+        name: Optional[str] = None,
+        schedule: Optional[str] = None,
+        enabled: Optional[bool] = None,
+        check_disk_health: Optional[bool] = None,
+        check_smart_tests: Optional[bool] = None,
+        check_scrubs: Optional[bool] = None,
+        aggressive_hours: Optional[bool] = None
+    ) -> bool:
+        """Update an existing health check schedule"""
+        with self._lock, self._interprocess_lock():
+            data = self._read_json(self.health_schedules_file)
+            
+            for record in data.get('schedules', []):
+                if record['id'] == schedule_id:
+                    if name is not None:
+                        record['name'] = name
+                    if schedule is not None:
+                        record['schedule'] = schedule
+                    if enabled is not None:
+                        record['enabled'] = enabled
+                    if check_disk_health is not None:
+                        record['check_disk_health'] = check_disk_health
+                    if check_smart_tests is not None:
+                        record['check_smart_tests'] = check_smart_tests
+                    if check_scrubs is not None:
+                        record['check_scrubs'] = check_scrubs
+                    if aggressive_hours is not None:
+                        record['aggressive_hours'] = aggressive_hours
+                    
+                    record['updated_at'] = datetime.now().isoformat()
+                    
+                    self._write_json(self.health_schedules_file, data)
+                    self._write_log(f"Updated health schedule #{schedule_id}")
+                    return True
+            
+            return False
+    
+    def update_health_schedule_status(
+        self,
+        schedule_id: int,
+        last_run: Optional[str] = None,
+        last_status: Optional[str] = None,
+        next_run: Optional[str] = None,
+        last_report_id: Optional[str] = None
+    ) -> bool:
+        """Update health schedule execution status"""
+        with self._lock, self._interprocess_lock():
+            data = self._read_json(self.health_schedules_file)
+            
+            for record in data.get('schedules', []):
+                if record['id'] == schedule_id:
+                    if last_run is not None:
+                        record['last_run'] = last_run
+                    if last_status is not None:
+                        record['last_status'] = last_status
+                    if next_run is not None:
+                        record['next_run'] = next_run
+                    if last_report_id is not None:
+                        record['last_report_id'] = last_report_id
+                    
+                    self._write_json(self.health_schedules_file, data)
+                    return True
+            
+            return False
+    
+    def delete_health_schedule(self, schedule_id: int) -> bool:
+        """Delete a health check schedule"""
+        with self._lock, self._interprocess_lock():
+            data = self._read_json(self.health_schedules_file)
+            
+            schedules = data.get('schedules', [])
+            original_length = len(schedules)
+            
+            data['schedules'] = [s for s in schedules if s['id'] != schedule_id]
+            
+            if len(data['schedules']) < original_length:
+                self._write_json(self.health_schedules_file, data)
+                self._write_log(f"Deleted health schedule #{schedule_id}")
                 return True
             
             return False

@@ -114,7 +114,7 @@
             </div>
         </a>
 
-        <a href="/zfs/replication/jobs/create/form" class="card group hover:scale-[1.02] transition-all duration-200">
+        <a href="/zfs/replication/syncoid/jobs/create/form" class="card group hover:scale-[1.02] transition-all duration-200">
             <div class="card-body">
                 <div class="flex items-start mb-3">
                     <div class="p-3 bg-success-900/50 border border-success-700 rounded-lg mr-4">
@@ -124,9 +124,9 @@
                     </div>
                     <div class="flex-1">
                         <h5 class="text-xl font-semibold text-text-primary mb-2 group-hover:text-success-400 transition-colors">
-                            Schedule Job
+                            Schedule Syncoid Job
                         </h5>
-                        <p class="text-text-secondary text-sm">Create scheduled replication jobs</p>
+                        <p class="text-text-secondary text-sm">Create a recurring replication job</p>
                     </div>
                 </div>
             </div>
@@ -166,7 +166,8 @@
         </a>
     </div>
 
-    <!-- Scheduled Replication Jobs -->
+    <!-- Scheduled Syncoid Jobs. Native send/receive scheduling was
+         removed; all recurring replication runs through Syncoid. -->
     <div class="card mb-8">
         <div class="px-6 py-4 border-b border-border-subtle flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
             <div>
@@ -174,13 +175,13 @@
                     <svg class="w-5 h-5 mr-2 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
                     </svg>
-                    Scheduled Replication Jobs
+                    Scheduled Syncoid Jobs
                 </h2>
-                {% if jobs %}
-                    <p class="text-sm text-text-secondary mt-1">{{ jobs|length }} job(s) configured</p>
+                {% if scheduled_jobs %}
+                    <p class="text-sm text-text-secondary mt-1">{{ scheduled_jobs|length }} job(s) configured</p>
                 {% endif %}
             </div>
-            <a href="/zfs/replication/jobs/create/form" class="btn-success inline-flex items-center whitespace-nowrap">
+            <a href="/zfs/replication/syncoid/jobs/create/form" class="btn-success inline-flex items-center whitespace-nowrap">
                 <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
                 </svg>
@@ -188,7 +189,7 @@
             </a>
         </div>
         <div class="p-6">
-            {% if jobs %}
+            {% if scheduled_jobs %}
             <div class="overflow-x-auto">
                 <table class="min-w-full divide-y divide-border-subtle">
                     <thead>
@@ -196,28 +197,54 @@
                             <th class="px-6 py-3 text-left text-xs font-medium text-text-secondary uppercase tracking-wider">Name</th>
                             <th class="px-6 py-3 text-left text-xs font-medium text-text-secondary uppercase tracking-wider">Source</th>
                             <th class="px-6 py-3 text-left text-xs font-medium text-text-secondary uppercase tracking-wider">Target</th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-text-secondary uppercase tracking-wider">Type</th>
                             <th class="px-6 py-3 text-left text-xs font-medium text-text-secondary uppercase tracking-wider">Schedule</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-text-secondary uppercase tracking-wider">Next Run</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-text-secondary uppercase tracking-wider">Last Result</th>
                             <th class="px-6 py-3 text-left text-xs font-medium text-text-secondary uppercase tracking-wider">Status</th>
                             <th class="px-6 py-3 text-left text-xs font-medium text-text-secondary uppercase tracking-wider">Actions</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-border-subtle">
-                        {% for job in jobs %}
+                        {% for job in scheduled_jobs %}
                         <tr class="hover:bg-bg-elevated-2 transition-colors">
                             <td class="px-6 py-4 whitespace-nowrap">
-                                <a href="/zfs/replication/jobs/{{ job.id }}/detail" class="text-primary-400 hover:text-primary-300 font-medium transition-colors">
+                                <a href="/zfs/replication/syncoid/jobs/{{ job.id }}/edit" class="text-primary-400 hover:text-primary-300 font-medium transition-colors">
                                     {{ job.name }}
                                 </a>
+                                {% if job.connection_name %}
+                                <div class="text-xs text-text-tertiary mt-1">via {{ job.connection_name }}</div>
+                                {% endif %}
+                                {% if job.connection_missing %}
+                                <div class="text-xs text-warning-400 mt-1">SSH connection missing</div>
+                                {% endif %}
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap font-mono text-sm text-text-secondary">{{ job.source_dataset }}</td>
                             <td class="px-6 py-4 whitespace-nowrap font-mono text-sm text-text-secondary">{{ job.target_dataset }}</td>
-                            <td class="px-6 py-4 whitespace-nowrap">
-                                <span class="badge-info">
-                                    {{ job.replication_type }}
-                                </span>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-text-secondary">
+                                {{ job.schedule_label or job.schedule }}
+                                <div class="text-xs font-mono text-text-tertiary mt-1">{{ job.schedule }}</div>
                             </td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-text-secondary">{{ job.schedule }}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-text-secondary">
+                                {% if job.enabled and job.next_run %}
+                                    {{ job.next_run|truncate(16, True, '') }}
+                                {% else %}
+                                    <span class="text-text-tertiary">Not scheduled</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm">
+                                {% if job.last_status == 'success' %}
+                                    <span class="badge-success">Success</span>
+                                {% elif job.last_status == 'failure' %}
+                                    <span class="badge-danger">Failed</span>
+                                {% elif job.last_status %}
+                                    <span class="badge-info">{{ job.last_status }}</span>
+                                {% else %}
+                                    <span class="text-text-tertiary">Never run</span>
+                                {% endif %}
+                                {% if job.last_run %}
+                                <div class="text-xs text-text-tertiary mt-1">{{ job.last_run|truncate(16, True, '') }}</div>
+                                {% endif %}
+                            </td>
                             <td class="px-6 py-4 whitespace-nowrap">
                                 {% if job.enabled %}
                                 <span class="badge-success">
@@ -237,13 +264,21 @@
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
                                 <div class="flex items-center gap-3">
-                                    <a href="/zfs/replication/jobs/{{ job.id }}/detail" class="text-info-400 hover:text-info-300 transition-colors" title="Details">
+                                    <a href="/zfs/replication/syncoid/jobs/{{ job.id }}/edit" class="text-info-400 hover:text-info-300 transition-colors" title="Edit">
                                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
                                         </svg>
                                     </a>
+                                    <form method="post" action="/zfs/replication/syncoid/jobs/{{ job.id }}/run" class="inline-flex">
+                                        <button type="submit" class="inline-flex items-center text-primary-400 hover:text-primary-300 transition-colors bg-transparent border-0 p-0 cursor-pointer" title="Run now">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                                            </svg>
+                                        </button>
+                                    </form>
                                     {% if job.enabled %}
-                                    <form method="post" action="/zfs/replication/jobs/{{ job.id }}/disable" class="inline-flex">
+                                    <form method="post" action="/zfs/replication/syncoid/jobs/{{ job.id }}/disable" class="inline-flex">
                                         <button type="submit" class="inline-flex items-center text-warning-400 hover:text-warning-300 transition-colors bg-transparent border-0 p-0 cursor-pointer" title="Disable">
                                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
@@ -251,20 +286,22 @@
                                         </button>
                                     </form>
                                     {% else %}
-                                    <form method="post" action="/zfs/replication/jobs/{{ job.id }}/enable" class="inline-flex">
+                                    <form method="post" action="/zfs/replication/syncoid/jobs/{{ job.id }}/enable" class="inline-flex">
                                         <button type="submit" class="inline-flex items-center text-success-400 hover:text-success-300 transition-colors bg-transparent border-0 p-0 cursor-pointer" title="Enable">
                                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
-                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
                                             </svg>
                                         </button>
                                     </form>
                                     {% endif %}
-                                    <a href="/zfs/replication/jobs/{{ job.id }}/delete/confirm" class="text-danger-400 hover:text-danger-300 transition-colors" title="Delete">
-                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
-                                        </svg>
-                                    </a>
+                                    <form method="post" action="/zfs/replication/syncoid/jobs/{{ job.id }}/delete" class="inline-flex"
+                                          onsubmit="return confirm('Delete scheduled job {{ job.name }}?');">
+                                        <button type="submit" class="inline-flex items-center text-danger-400 hover:text-danger-300 transition-colors bg-transparent border-0 p-0 cursor-pointer" title="Delete">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                            </svg>
+                                        </button>
+                                    </form>
                                 </div>
                             </td>
                         </tr>
@@ -277,8 +314,8 @@
                 <svg class="w-16 h-16 mx-auto text-text-tertiary mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
                 </svg>
-                <p class="text-text-secondary mb-4">No scheduled replication jobs configured.</p>
-                <a href="/zfs/replication/jobs/create/form" class="btn-primary inline-flex items-center">
+                <p class="text-text-secondary mb-4">No scheduled Syncoid jobs configured.</p>
+                <a href="/zfs/replication/syncoid/jobs/create/form" class="btn-primary inline-flex items-center">
                     <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
                     </svg>

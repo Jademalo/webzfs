@@ -228,6 +228,9 @@ fi
 if [ ! -f "${DATA_DIR}/health_reports.json" ]; then
     echo '{"reports": []}' > "${DATA_DIR}/health_reports.json"
 fi
+if [ ! -f "${DATA_DIR}/health_schedules.json" ]; then
+    echo '{"schedules": [], "next_id": 1}' > "${DATA_DIR}/health_schedules.json"
+fi
 
 chown -R "$WEBZFS_USER:$WEBZFS_USER" "$DATA_DIR"
 echo -e "${GREEN}✓${NC} Data directory and files created"
@@ -338,6 +341,22 @@ webzfs ALL=(ALL) NOPASSWD: /usr/bin/systemctl, /bin/systemctl
 
 # Crontab editing
 webzfs ALL=(ALL) NOPASSWD: /usr/bin/crontab
+
+# Scheduled syncoid job timers.
+# Unit files are created and edited with "sudo tee" (covered by the
+# general tee entry below) and enabled/disabled/reloaded with
+# "sudo systemctl" (covered by the systemctl entry above). The explicit
+# tee entries here document that intent and keep timer management
+# working even if the general tee entry is ever narrowed. rm is
+# restricted to WebZFS-owned unit files only.
+webzfs ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/webzfs-syncoid-job-*, /bin/tee /etc/systemd/system/webzfs-syncoid-job-*
+webzfs ALL=(ALL) NOPASSWD: /usr/bin/rm -f /etc/systemd/system/webzfs-syncoid-job-*, /bin/rm -f /etc/systemd/system/webzfs-syncoid-job-*
+
+# Unified Scheduling Hub timers. All scheduled task types (scrub, SMART
+# self-test, health check, and replication) use the webzfs-task-* unit
+# naming scheme managed by services/job_scheduler.py.
+webzfs ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/webzfs-task-*, /bin/tee /etc/systemd/system/webzfs-task-*
+webzfs ALL=(ALL) NOPASSWD: /usr/bin/rm -f /etc/systemd/system/webzfs-task-*, /bin/rm -f /etc/systemd/system/webzfs-task-*
 
 # File editing (for config files like smartd.conf, sanoid.conf)
 webzfs ALL=(ALL) NOPASSWD: /usr/bin/cat, /usr/bin/tee, /usr/bin/mkdir

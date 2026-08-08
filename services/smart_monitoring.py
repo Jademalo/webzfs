@@ -12,6 +12,12 @@ from pathlib import Path
 
 from services.utils import is_freebsd, is_netbsd, run_privileged_command
 
+# Sentinel stored in the disk field of a scheduled test to mean "every
+# disk present at run time". A sentinel is used rather than expanding the
+# disk list at creation time so that disks added later are covered, and so
+# a fleet of 20 disks is one schedule instead of 20.
+ALL_DISKS = '__all__'
+
 
 class SMARTMonitoringService:
     """Service for SMART disk monitoring and management"""
@@ -578,11 +584,45 @@ class SMARTMonitoringService:
             'test_type': test_type,
             'schedule': schedule,
             'enabled': enabled,
+            'last_run': None,
+            'last_status': None,
+            'next_run': None,
             'created_at': datetime.now().isoformat()
         }
         self._write_json(self.scheduled_tests_file, data)
         
         return schedule_id
+    
+    def get_scheduled_test(self, schedule_id: str) -> Optional[Dict[str, Any]]:
+        """Get a single scheduled SMART test by ID"""
+        data = self._read_json(self.scheduled_tests_file)
+        return data.get(schedule_id)
+    
+    def update_scheduled_test_status(
+        self,
+        schedule_id: str,
+        last_run: Optional[str] = None,
+        last_status: Optional[str] = None,
+        next_run: Optional[str] = None
+    ) -> None:
+        """Record the outcome of a scheduled test run.
+
+        Called by services/task_runner.py after the OS scheduler fires
+        the test, and by the Run Now action in the scheduling UI.
+        """
+        data = self._read_json(self.scheduled_tests_file)
+        
+        if schedule_id not in data:
+            return
+        
+        if last_run is not None:
+            data[schedule_id]['last_run'] = last_run
+        if last_status is not None:
+            data[schedule_id]['last_status'] = last_status
+        if next_run is not None:
+            data[schedule_id]['next_run'] = next_run
+        
+        self._write_json(self.scheduled_tests_file, data)
     
     def update_scheduled_test(self, schedule_id: str, **updates) -> None:
         """Update a scheduled test"""

@@ -1,0 +1,232 @@
+{% extends "layout.jinja" %}
+
+{% set active_page = 'utils' %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8 max-w-4xl">
+    <!-- Breadcrumb Navigation -->
+    <nav class="text-sm mb-6 text-text-tertiary">
+        <a href="/utils" class="hover:text-primary-400">Utilities</a>
+        <span class="mx-2">/</span>
+        <a href="/utils/scheduling" class="hover:text-primary-400">Scheduling</a>
+        <span class="mx-2">/</span>
+        <span class="text-text-primary">{% if task %}Edit Task{% else %}New Task{% endif %}</span>
+    </nav>
+
+    <!-- Page Header -->
+    <div class="mb-6">
+        <h1 class="text-3xl font-bold text-text-primary mb-2">
+            {% if task %}Edit Scheduled Task{% else %}Create Scheduled Task{% endif %}
+        </h1>
+        <p class="text-text-secondary text-sm">
+            The schedule is registered with the operating system scheduler as soon as it is saved
+        </p>
+    </div>
+
+    <div class="card mb-6">
+        <div class="card-body">
+            <form method="post" action="/utils/scheduling/save" id="task-form">
+                <input type="hidden" name="task_type" value="{{ task_type }}">
+                {% if task %}
+                <input type="hidden" name="task_id" value="{{ task.id }}">
+                {% endif %}
+
+                <!-- Task type selector (create only; the store owning a -->
+                <!-- record cannot change after it exists) -->
+                {% if not task %}
+                <div class="mb-6">
+                    <label class="form-label" for="task_type_selector">Task Type</label>
+                    <select id="task_type_selector" class="form-select">
+                        <option value="scrub" {% if task_type == 'scrub' %}selected{% endif %}>Pool Scrub</option>
+                        <option value="smart" {% if task_type == 'smart' %}selected{% endif %}>SMART Self-Test</option>
+                        <option value="health" {% if task_type == 'health' %}selected{% endif %}>Health Check</option>
+                    </select>
+                    <p class="text-text-tertiary text-xs mt-1">
+                        Replication jobs are created on the
+                        <a href="/zfs/replication/syncoid/jobs/create/form" class="text-primary-400 hover:text-primary-300">Syncoid page</a>
+                        because they need connection and transport options.
+                    </p>
+                </div>
+                {% else %}
+                <div class="mb-6">
+                    <p class="text-text-secondary text-sm">
+                        Task type: <span class="text-text-primary font-medium">
+                        {% if task_type == 'scrub' %}Pool Scrub{% elif task_type == 'smart' %}SMART Self-Test{% else %}Health Check{% endif %}
+                        </span>
+                    </p>
+                </div>
+                {% endif %}
+
+                <!-- Scrub fields -->
+                <div id="fields-scrub" class="mb-6 {% if task_type != 'scrub' %}hidden{% endif %}">
+                    <label class="form-label" for="pool">ZFS Pool</label>
+                    <select name="pool" id="pool" class="form-select">
+                        <option value="">Select a pool...</option>
+                        {% for pool in pools %}
+                        <option value="{{ pool }}" {% if task and task.pool == pool %}selected{% endif %}>{{ pool }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- SMART fields -->
+                <div id="fields-smart" class="mb-6 grid grid-cols-1 md:grid-cols-2 gap-4 {% if task_type != 'smart' %}hidden{% endif %}">
+                    <div>
+                        <label class="form-label" for="disk">Disk</label>
+                        <select name="disk" id="disk" class="form-select">
+                            <option value="">Select a disk...</option>
+                            {% for disk in disks %}
+                            <option value="{{ disk }}" {% if task and task.disk == disk %}selected{% endif %}>{{ disk }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="form-label" for="test_type">Test Type</label>
+                        <select name="test_type" id="test_type" class="form-select">
+                            <option value="short" {% if task and task.test_type == 'short' %}selected{% endif %}>Short (a few minutes)</option>
+                            <option value="long" {% if task and task.test_type == 'long' %}selected{% endif %}>Long (hours)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Health check fields -->
+                <div id="fields-health" class="mb-6 {% if task_type != 'health' %}hidden{% endif %}">
+                    <div class="mb-4">
+                        <label class="form-label" for="name">Schedule Name</label>
+                        <input type="text" name="name" id="name" class="form-input"
+                               value="{{ task.name if task and task.name else '' }}"
+                               placeholder="e.g., Weekly full health report">
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <label class="flex items-center">
+                            <input type="checkbox" name="check_disk_health" value="true" class="form-checkbox"
+                                   {% if not task or task.check_disk_health %}checked{% endif %}>
+                            <span class="ml-3 text-text-secondary">Check disk health</span>
+                        </label>
+                        <label class="flex items-center">
+                            <input type="checkbox" name="check_smart_tests" value="true" class="form-checkbox"
+                                   {% if not task or task.check_smart_tests %}checked{% endif %}>
+                            <span class="ml-3 text-text-secondary">Check SMART test coverage</span>
+                        </label>
+                        <label class="flex items-center">
+                            <input type="checkbox" name="check_scrubs" value="true" class="form-checkbox"
+                                   {% if not task or task.check_scrubs %}checked{% endif %}>
+                            <span class="ml-3 text-text-secondary">Check scrub status</span>
+                        </label>
+                        <label class="flex items-center">
+                            <input type="checkbox" name="aggressive_hours" value="true" class="form-checkbox"
+                                   {% if task and task.aggressive_hours %}checked{% endif %}>
+                            <span class="ml-3 text-text-secondary">Aggressive power-on hour thresholds</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Schedule -->
+                <div class="mb-6">
+                    <h3 class="font-semibold text-lg mb-4 text-text-primary">Schedule</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="form-label" for="schedule_preset">Preset</label>
+                            <select id="schedule_preset" class="form-select">
+                                <option value="">Custom</option>
+                                {% for preset in schedule_presets %}
+                                <option value="{{ preset.expression }}" {% if task and task.schedule == preset.expression %}selected{% endif %}>{{ preset.label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="form-label" for="schedule">Cron Expression</label>
+                            <input type="text" name="schedule" id="schedule" required class="form-input"
+                                   value="{{ task.schedule if task else '0 2 * * 0' }}" placeholder="0 2 * * 0">
+                            <p id="schedule-status" class="text-text-tertiary text-xs mt-1">minute hour day month weekday (local time)</p>
+                        </div>
+                    </div>
+                    <div id="next-runs" class="hidden mt-3 bg-bg-elevated-3 border border-border-default rounded-lg px-4 py-3 text-sm text-text-secondary"></div>
+                    <label class="flex items-center mt-4">
+                        <input type="checkbox" name="enabled" value="true" class="form-checkbox"
+                               {% if not task or task.enabled %}checked{% endif %}>
+                        <span class="ml-3 text-text-secondary">Enabled (task runs on schedule)</span>
+                    </label>
+                </div>
+
+                <!-- Actions -->
+                <div class="flex items-center justify-between pt-4 border-t border-border-subtle">
+                    <button type="submit" class="btn-primary">
+                        {% if task %}Save Changes{% else %}Create Task{% endif %}
+                    </button>
+                    <a href="/utils/scheduling" class="btn-secondary">Cancel</a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+(function() {
+    const typeSelector = document.getElementById('task_type_selector');
+    const typeField = document.querySelector('input[name="task_type"]');
+    const presetSelect = document.getElementById('schedule_preset');
+    const scheduleInput = document.getElementById('schedule');
+    const scheduleStatus = document.getElementById('schedule-status');
+    const nextRunsBox = document.getElementById('next-runs');
+    let validateTimer = null;
+
+    function updateVisibleFields(selectedType) {
+        ['scrub', 'smart', 'health'].forEach(function(name) {
+            const block = document.getElementById('fields-' + name);
+            if (block) {
+                block.classList.toggle('hidden', name !== selectedType);
+            }
+        });
+    }
+
+    if (typeSelector) {
+        typeSelector.addEventListener('change', function() {
+            typeField.value = this.value;
+            updateVisibleFields(this.value);
+        });
+        updateVisibleFields(typeSelector.value);
+    }
+
+    presetSelect.addEventListener('change', function() {
+        if (this.value) {
+            scheduleInput.value = this.value;
+            validateSchedule();
+        }
+    });
+
+    async function validateSchedule() {
+        const expression = scheduleInput.value.trim();
+        if (!expression) { return; }
+        try {
+            const response = await fetch('/utils/scheduling/validate-schedule', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ schedule: expression })
+            });
+            const data = await response.json();
+            if (data.valid) {
+                scheduleStatus.textContent = 'Valid schedule';
+                scheduleStatus.className = 'text-success-400 text-xs mt-1';
+                nextRunsBox.classList.remove('hidden');
+                nextRunsBox.innerHTML = '<strong class="text-text-primary">Next runs:</strong> '
+                    + data.next_runs.join(', ');
+            } else {
+                scheduleStatus.textContent = data.error || 'Invalid schedule';
+                scheduleStatus.className = 'text-danger-400 text-xs mt-1';
+                nextRunsBox.classList.add('hidden');
+            }
+        } catch (err) {
+            scheduleStatus.textContent = 'Could not validate schedule';
+            scheduleStatus.className = 'text-warning-400 text-xs mt-1';
+        }
+    }
+
+    scheduleInput.addEventListener('input', function() {
+        clearTimeout(validateTimer);
+        validateTimer = setTimeout(validateSchedule, 500);
+    });
+
+    validateSchedule();
+})();
+</script>
+{% endblock %}
