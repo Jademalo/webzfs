@@ -233,16 +233,38 @@ async def scrub_new_form(request: Request):
 
 @router.get("/smart/new", response_class=HTMLResponse)
 async def smart_new_form(request: Request):
-    """Render the new SMART self-test schedule form."""
+    """Render the new SMART self-test schedule form.
+
+    The disk dropdown is not populated here. Probing disks with smartctl
+    can wake idle drives and take many seconds, so the form shell renders
+    immediately and the disk options load through the HTMX partial below.
+    """
     return templates.TemplateResponse(
         request,
         name="utils/scheduling/smart_form.jinja",
         context={
             "page_title": "New SMART Test Schedule",
             "task": None,
-            "disks": _disk_paths(),
             "all_disks_value": ALL_DISKS,
             "schedule_presets": get_schedule_presets(),
+        },
+    )
+
+
+@router.get("/smart/disk-options-partial", response_class=HTMLResponse)
+async def smart_disk_options_partial(request: Request, selected: str = ""):
+    """HTMX partial that probes disks and renders the disk selector.
+
+    This is the slow step (smartctl wakes idle drives), so it runs after
+    the form page has already been shown to the user.
+    """
+    return templates.TemplateResponse(
+        request,
+        name="utils/scheduling/smart_disk_field.jinja",
+        context={
+            "disks": _disk_paths(),
+            "selected": selected,
+            "all_disks_value": ALL_DISKS,
         },
     )
 
@@ -278,6 +300,9 @@ async def scheduling_edit_form(request: Request, task_type: str, task_id: str):
             status_code=303,
         )
 
+    # Disks are intentionally not probed here. The SMART form loads its
+    # disk selector through the disk-options-partial endpoint so the edit
+    # page appears immediately instead of waiting for idle drives to wake.
     return templates.TemplateResponse(
         request,
         name=template_name,
@@ -285,7 +310,6 @@ async def scheduling_edit_form(request: Request, task_type: str, task_id: str):
             "page_title": "Edit Scheduled Task",
             "task": task,
             "pools": _pool_names() if task_type == "scrub" else [],
-            "disks": _disk_paths() if task_type == "smart" else [],
             "all_disks_value": ALL_DISKS,
             "schedule_presets": get_schedule_presets(),
         },

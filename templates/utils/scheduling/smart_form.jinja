@@ -34,23 +34,23 @@
                 <div class="mb-6 grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                         <label class="form-label" for="disk">Disk</label>
-                        <select name="disk" id="disk" class="form-select" required>
-                            <option value="">Select a disk...</option>
-                            <!-- All disks is one schedule covering the whole
-                                 fleet, so 20 disks do not need 20 tasks. -->
-                            <option value="{{ all_disks_value }}" {% if task and task.disk == all_disks_value %}selected{% endif %}>All disks ({{ disks|length }} present)</option>
-                            {% for disk in disks %}
-                            <option value="{{ disk }}" {% if task and task.disk == disk %}selected{% endif %}>{{ disk }}</option>
-                            {% endfor %}
-                        </select>
-                        <p class="text-text-tertiary text-xs mt-1">
-                            All disks resolves the disk list each time the task runs, so disks added later are covered automatically.
-                        </p>
-                        {% if task and task.disk and task.disk != all_disks_value and task.disk not in disks %}
-                        <p class="text-warning-400 text-xs mt-1">
-                            The disk this schedule refers to ({{ task.disk }}) is not currently present.
-                        </p>
-                        {% endif %}
+                        <!-- HTMX deferred loading: probing disks with smartctl
+                             wakes idle drives and can take many seconds, so the
+                             disk options load after the page has rendered. -->
+                        <div hx-get="/utils/scheduling/smart/disk-options-partial?selected={{ task.disk | urlencode if task and task.disk else '' }}"
+                             hx-trigger="load"
+                             hx-swap="innerHTML">
+                            <select id="disk" class="form-select" disabled>
+                                <option value="">Detecting disks...</option>
+                            </select>
+                            <p class="text-text-tertiary text-xs mt-1 flex items-center">
+                                <svg class="animate-spin h-3 w-3 text-primary-400 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                                Probing SMART-capable devices, this may take a moment.
+                            </p>
+                        </div>
                     </div>
                     <div>
                         <label class="form-label" for="test_type">Test Type</label>
