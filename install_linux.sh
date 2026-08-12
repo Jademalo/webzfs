@@ -453,5 +453,11 @@ echo
 echo "To access the web interface:"
 echo "  http://localhost:26619"
 echo
+echo -e "${YELLOW}IMPORTANT: The WebUI binds to 127.0.0.1 by default and will NOT be${NC}"
+echo -e "${YELLOW}reachable from other machines on your local network. To access it${NC}"
+echo -e "${YELLOW}remotely, either change the HOST setting in $INSTALL_DIR/.env or use${NC}"
+echo -e "${YELLOW}SSH port forwarding. See the 'Access' section of the README for details.${NC}"
+echo
 echo "For more information, see: $INSTALL_DIR/BUILD_AND_RUN.md"
 echo
+
