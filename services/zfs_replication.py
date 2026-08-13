@@ -6,6 +6,7 @@ Hi Jim. :)
 """
 import subprocess
 import json
+import time
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from enum import Enum
@@ -872,19 +873,125 @@ class ZFSReplicationService:
         ssh_parts.extend(receive_cmd)
         return ' '.join(send_cmd) + ' | ' + ' '.join(ssh_parts)
     
+    def _estimate_send_size(self, send_cmd: List[str]) -> int:
+        """Estimate total bytes for a send command using a dry run.
+
+        Inserts -n (dry run) and -P (machine parseable) into a copy of
+        the send command and parses the reported size. Returns 0 when
+        the size cannot be determined so callers can skip percentage
+        and ETA calculations.
+        """
+        try:
+            dry_run_cmd = list(send_cmd)
+            insert_at = dry_run_cmd.index('send') + 1
+            dry_run_cmd[insert_at:insert_at] = ['-n', '-P']
+            full_cmd = build_zfs_command(dry_run_cmd)
+            result = subprocess.run(
+                full_cmd, capture_output=True, text=True, timeout=120
+            )
+            combined_output = result.stdout + '\n' + result.stderr
+            for line in combined_output.split('\n'):
+                parts = line.split()
+                if len(parts) >= 2 and parts[0] == 'size':
+                    return int(parts[1])
+        except Exception:
+            pass
+        return 0
+    
+    def _pump_with_progress(
+        self, send_process, receive_process, execution_id: int, total_bytes: int
+    ) -> int:
+        """Copy the send stream into the receive stdin, recording progress.
+        
+        Reads the zfs send output in chunks, writes it to the receiving
+        process, and records a progress update roughly every two seconds
+        so the monitor page and SSE stream have live data to display.
+        Returns the total number of bytes transferred.
+        """
+        bytes_transferred = 0
+        chunk_size = 1024 * 1024
+        start_time = time.time()
+        last_update_time = start_time
+        last_update_bytes = 0
+        
+        try:
+            while True:
+                chunk = send_process.stdout.read(chunk_size)
+                if not chunk:
+                    break
+                try:
+                    receive_process.stdin.write(chunk)
+                except (BrokenPipeError, OSError):
+                    # Receive side exited; stop pumping. The caller
+                    # surfaces the receive process stderr as the error.
+                    break
+                bytes_transferred += len(chunk)
+                
+                now = time.time()
+                if now - last_update_time >= 2:
+                    interval_rate = (
+                        (bytes_transferred - last_update_bytes)
+                        / (now - last_update_time)
+                    )
+                    percentage = 0.0
+                    eta = None
+                    if total_bytes > 0:
+                        percentage = min(
+                            bytes_transferred / total_bytes * 100, 99.9
+                        )
+                        if interval_rate > 0:
+                            remaining = max(total_bytes - bytes_transferred, 0)
+                            eta_seconds = int(remaining / interval_rate)
+                            eta = f"{eta_seconds // 60}m {eta_seconds % 60}s"
+                    try:
+                        self.storage.add_progress_update(
+                            execution_id=execution_id,
+                            bytes_transferred=bytes_transferred,
+                            percentage_complete=percentage,
+                            transfer_rate=(
+                                f"{self._format_bytes(int(interval_rate))}/s"
+                            ),
+                            estimated_time_remaining=eta,
+                            status_message=(
+                                f"Transferred "
+                                f"{self._format_bytes(bytes_transferred)}"
+                            )
+                        )
+                    except Exception:
+                        # Progress recording must never break the transfer
+                        pass
+                    last_update_time = now
+                    last_update_bytes = bytes_transferred
+        finally:
+            try:
+                receive_process.stdin.close()
+            except Exception:
+                pass
+            try:
+                send_process.stdout.close()
+            except Exception:
+                pass
+        
+        return bytes_transferred
+    
     def _execute_local_replication(
         self, send_cmd: List[str], receive_cmd: List[str], execution_id: int
     ) -> Dict[str, Any]:
         """Execute local replication using pipes with platform-appropriate sudo.
         
-        Pipes zfs send stdout into zfs receive stdin. Both processes' stderr
-        streams are captured so that when the receive side reports a generic
-        'failed to read from stream' error we can surface the real cause from
-        the send side.
+        The send stream is pumped through this process so progress
+        (bytes transferred, rate, percentage) can be recorded for the
+        real-time monitor. Both processes' stderr streams are captured
+        so that when the receive side reports a generic 'failed to read
+        from stream' error we can surface the real cause from the send
+        side.
         """
         # Build commands with sudo if needed (Linux)
         full_send_cmd = build_zfs_command(send_cmd)
         full_receive_cmd = build_zfs_command(receive_cmd)
+        
+        # Estimate total size for percentage/ETA reporting (best effort)
+        total_bytes = self._estimate_send_size(send_cmd)
         
         send_process = subprocess.Popen(
             full_send_cmd,
@@ -894,13 +1001,15 @@ class ZFSReplicationService:
         
         receive_process = subprocess.Popen(
             full_receive_cmd,
-            stdin=send_process.stdout,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE
         )
         
-        # Allow send_process to receive SIGPIPE if receive_process exits
-        send_process.stdout.close()
+        # Pump the stream through this process, recording progress updates
+        bytes_transferred = self._pump_with_progress(
+            send_process, receive_process, execution_id, total_bytes
+        )
         
         # Wait for receive to finish, then wait for send to finish
         receive_output, receive_error = receive_process.communicate()
@@ -938,7 +1047,11 @@ class ZFSReplicationService:
             log_parts.append(receive_error_text)
         log_output = '\n'.join(log_parts)
         
-        return {'bytes': 0, 'speed': 'N/A', 'log_output': log_output}
+        return {
+            'bytes': bytes_transferred,
+            'speed': 'N/A',
+            'log_output': log_output
+        }
     
     def _execute_remote_replication(
         self, send_cmd: List[str], receive_cmd: List[str],
@@ -947,9 +1060,11 @@ class ZFSReplicationService:
         """Execute remote replication over SSH.
         
         Pipes zfs send stdout through SSH into zfs receive on the remote host.
-        Both the local send process and remote SSH process stderr streams are
-        captured so that when the remote receive reports a generic error we can
-        surface the real cause from the local send side.
+        The stream is pumped through this process so progress can be
+        recorded for the real-time monitor. Both the local send process
+        and remote SSH process stderr streams are captured so that when
+        the remote receive reports a generic error we can surface the
+        real cause from the local send side.
         """
         remote_host = options.get('remote_host')
         remote_port = options.get('remote_port', 22)
@@ -974,6 +1089,9 @@ class ZFSReplicationService:
         ssh_cmd.append(remote_host)
         ssh_cmd.extend(receive_cmd)
         
+        # Estimate total size for percentage/ETA reporting (best effort)
+        total_bytes = self._estimate_send_size(send_cmd)
+        
         # Execute send | ssh receive
         send_process = subprocess.Popen(
             full_send_cmd,
@@ -983,13 +1101,15 @@ class ZFSReplicationService:
         
         ssh_process = subprocess.Popen(
             ssh_cmd,
-            stdin=send_process.stdout,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE
         )
         
-        # Allow send_process to receive SIGPIPE if ssh_process exits
-        send_process.stdout.close()
+        # Pump the stream through this process, recording progress updates
+        bytes_transferred = self._pump_with_progress(
+            send_process, ssh_process, execution_id, total_bytes
+        )
         
         # Wait for SSH/receive to finish, then wait for send to finish
         ssh_output, ssh_error = ssh_process.communicate()
@@ -1024,7 +1144,11 @@ class ZFSReplicationService:
             log_parts.append(ssh_error_text)
         log_output = '\n'.join(log_parts)
         
-        return {'bytes': 0, 'speed': 'N/A', 'log_output': log_output}
+        return {
+            'bytes': bytes_transferred,
+            'speed': 'N/A',
+            'log_output': log_output
+        }
     
     def _calculate_next_run(self, schedule: str) -> Optional[str]:
         """Calculate next run time from cron schedule"""

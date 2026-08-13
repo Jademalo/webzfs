@@ -206,59 +206,89 @@
     </div>
 
     <script>
-        // Connect to SSE endpoint for real-time progress
-        const eventSource = new EventSource('/zfs/replication/api/progress-stream');
-        const liveProgressDiv = document.getElementById('live-progress');
-        
-        eventSource.onmessage = function(event) {
-            try {
-                const data = JSON.parse(event.data);
-                
-                if (data.keepalive) {
-                    return;
+        // Poll the progress endpoint every 2 seconds for real-time updates.
+        // Polling is used instead of Server-Sent Events because it works
+        // reliably across gunicorn workers and HTMX boosted navigation.
+        (function() {
+            const liveProgressDiv = document.getElementById('live-progress');
+            const progressUrl = '/zfs/replication/api/executions/{{ execution.id }}/progress';
+            let pollTimer = null;
+            let consecutiveErrors = 0;
+
+            function stopPolling() {
+                if (pollTimer !== null) {
+                    clearInterval(pollTimer);
+                    pollTimer = null;
                 }
-                
-                if (data.error) {
-                    liveProgressDiv.innerHTML = '<p class="text-danger-400">Error: ' + data.error + '</p>';
-                    eventSource.close();
-                    return;
-                }
-                
-                if (data.execution_id == {{ execution.id }}) {
-                    liveProgressDiv.innerHTML = 
-                        '<div class="space-y-3">' +
-                            '<div class="flex items-center justify-between">' +
-                                '<span class="text-lg font-medium">' + data.job_name + '</span>' +
-                                '<span class="text-2xl font-mono text-primary-400">' + data.percentage.toFixed(1) + '%</span>' +
-                            '</div>' +
-                            '<div class="w-full bg-bg-base rounded-full h-4 overflow-hidden">' +
-                                '<div class="bg-primary-500 h-full rounded-full transition-all duration-500" style="width: ' + data.percentage + '%"></div>' +
-                            '</div>' +
-                            '<div class="grid grid-cols-3 gap-4 text-sm">' +
-                                '<div><span class="text-text-tertiary">Transferred:</span> <span class="font-mono ml-1">' + (data.bytes_transferred / 1024 / 1024).toFixed(2) + ' MB</span></div>' +
-                                '<div><span class="text-text-tertiary">Rate:</span> <span class="font-mono ml-1">' + data.transfer_rate + '</span></div>' +
-                                '<div><span class="text-text-tertiary">ETA:</span> <span class="font-mono ml-1">' + data.eta + '</span></div>' +
-                            '</div>' +
-                        '</div>';
-                }
-            } catch (e) {
-                console.error('Error parsing SSE data:', e);
             }
-        };
-        
-        eventSource.onerror = function(event) {
-            console.error('SSE connection error:', event);
-            liveProgressDiv.innerHTML = '<p class="text-danger-400">Connection lost. Refresh page to reconnect.</p>';
-            eventSource.close();
-        };
-        
-        window.addEventListener('beforeunload', function() {
-            eventSource.close();
-        });
-        
-        document.body.addEventListener('htmx:beforeSwap', function() {
-            eventSource.close();
-        });
+
+            function renderProgress(data) {
+                if (data.status !== 'running') {
+                    stopPolling();
+                    liveProgressDiv.innerHTML =
+                        '<p class="text-text-secondary">Replication finished with status: ' +
+                        data.status + '. <a href="" class="text-primary-400 underline">Refresh</a> to see final details.</p>';
+                    return;
+                }
+
+                if (!data.progress) {
+                    liveProgressDiv.innerHTML =
+                        '<p class="text-text-secondary">Replication starting, waiting for first progress update...</p>';
+                    return;
+                }
+
+                const progress = data.progress;
+                const percentage = Number(progress.percentage) || 0;
+                const bytesTransferred = Number(progress.bytes_transferred) || 0;
+                liveProgressDiv.innerHTML =
+                    '<div class="space-y-3">' +
+                        '<div class="flex items-center justify-between">' +
+                            '<span class="text-lg font-medium">' + (data.job_name || '') + '</span>' +
+                            '<span class="text-2xl font-mono text-primary-400">' + percentage.toFixed(1) + '%</span>' +
+                        '</div>' +
+                        '<div class="w-full bg-bg-base rounded-full h-4 overflow-hidden">' +
+                            '<div class="bg-primary-500 h-full rounded-full transition-all duration-500" style="width: ' + percentage + '%"></div>' +
+                        '</div>' +
+                        '<div class="grid grid-cols-3 gap-4 text-sm">' +
+                            '<div><span class="text-text-tertiary">Transferred:</span> <span class="font-mono ml-1">' + (bytesTransferred / 1024 / 1024).toFixed(2) + ' MB</span></div>' +
+                            '<div><span class="text-text-tertiary">Rate:</span> <span class="font-mono ml-1">' + (progress.transfer_rate || 'N/A') + '</span></div>' +
+                            '<div><span class="text-text-tertiary">ETA:</span> <span class="font-mono ml-1">' + (progress.eta || 'N/A') + '</span></div>' +
+                        '</div>' +
+                    '</div>';
+            }
+
+            function poll() {
+                fetch(progressUrl, { cache: 'no-store' })
+                    .then(function(response) {
+                        if (!response.ok) {
+                            throw new Error('HTTP ' + response.status);
+                        }
+                        return response.json();
+                    })
+                    .then(function(data) {
+                        consecutiveErrors = 0;
+                        if (!data.success) {
+                            throw new Error(data.error || 'Unknown error');
+                        }
+                        renderProgress(data);
+                    })
+                    .catch(function(err) {
+                        consecutiveErrors += 1;
+                        if (consecutiveErrors >= 5) {
+                            stopPolling();
+                            liveProgressDiv.innerHTML =
+                                '<p class="text-danger-400">Lost connection to progress endpoint: ' +
+                                err.message + '. Refresh the page to reconnect.</p>';
+                        }
+                    });
+            }
+
+            poll();
+            pollTimer = setInterval(poll, 2000);
+
+            window.addEventListener('beforeunload', stopPolling);
+            document.body.addEventListener('htmx:beforeSwap', stopPolling);
+        })();
     </script>
     {% endif %}
 </div>

@@ -5,6 +5,7 @@ Provides web interface for ZFS replication operations using native send/receive 
 from fastapi import APIRouter, Request, Form, Depends, Body
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response
 from typing import Annotated, Optional, Dict
+import json
 import platform
 import threading
 from config.templates import templates
@@ -895,62 +896,53 @@ async def execution_error_log(request: Request, execution_id: int):
     )
 
 
-@router.get("/api/progress-stream")
-async def progress_stream(request: Request):
-    """Server-Sent Events endpoint for real-time progress monitoring"""
-    from fastapi.responses import StreamingResponse
-    import asyncio
-    
-    async def event_generator():
-        """Generate SSE events for active replication progress"""
-        try:
-            while True:
-                # Check if client disconnected
-                if await request.is_disconnected():
-                    break
-                
-                # Get active executions
-                active = replication_service.get_active_executions()
-                
-                if active:
-                    # Send progress updates for each active execution
-                    for execution in active:
-                        # Get latest progress details
-                        detail = replication_service.get_execution_detail(execution['id'])
-                        if detail and detail.get('progress_updates'):
-                            latest_progress = detail['progress_updates'][-1]
-                            
-                            data = {
-                                'execution_id': execution['id'],
-                                'job_name': execution['job_name'],
-                                'percentage': latest_progress.get('percentage_complete', 0),
-                                'bytes_transferred': latest_progress.get('bytes_transferred', 0),
-                                'transfer_rate': latest_progress.get('transfer_rate', 'N/A'),
-                                'eta': latest_progress.get('estimated_time_remaining', 'N/A'),
-                                'status': latest_progress.get('status_message', '')
-                            }
-                            
-                            yield f"data: {json.dumps(data)}\n\n"
-                else:
-                    # Send keepalive
-                    yield f"data: {json.dumps({'keepalive': True})}\n\n"
-                
-                # Wait before next update (update every 2 seconds)
-                await asyncio.sleep(2)
-                
-        except Exception as e:
-            # Send error event
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
-    
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"  # Disable nginx buffering
+@router.get("/api/executions/{execution_id}/progress")
+async def execution_progress(execution_id: int):
+    """JSON endpoint polled by the execution detail page.
+
+    Returns the execution status and the latest progress update so
+    the Real-Time Progress panel can refresh without a page reload.
+    Polling is used instead of Server-Sent Events because it works
+    reliably across gunicorn workers, reverse proxies, and HTMX
+    boosted navigation.
+    """
+    try:
+        detail = replication_service.get_execution_detail(execution_id)
+        if not detail:
+            return JSONResponse({
+                "success": False,
+                "error": "Execution not found"
+            }, status_code=404)
+
+        progress_updates = detail.get('progress_updates') or []
+        latest_progress = progress_updates[-1] if progress_updates else None
+
+        response = {
+            "success": True,
+            "execution_id": execution_id,
+            "status": detail.get('status'),
+            "job_name": detail.get('job_name'),
+            "update_count": len(progress_updates),
         }
-    )
+
+        if latest_progress:
+            response["progress"] = {
+                "timestamp": latest_progress.get('timestamp'),
+                "percentage": latest_progress.get('percentage_complete', 0) or 0,
+                "bytes_transferred": latest_progress.get('bytes_transferred', 0) or 0,
+                "transfer_rate": latest_progress.get('transfer_rate') or 'N/A',
+                "eta": latest_progress.get('estimated_time_remaining') or 'N/A',
+                "status_message": latest_progress.get('status_message') or ''
+            }
+        else:
+            response["progress"] = None
+
+        return JSONResponse(response)
+    except Exception as e:
+        return JSONResponse({
+            "success": False,
+            "error": str(e)
+        }, status_code=500)
 
 
 @router.get("/notifications/settings", response_class=HTMLResponse)
