@@ -472,6 +472,7 @@ class FileStorageService:
         skip_parent: bool = False,
         create_bookmark: bool = False,
         force_delete: bool = False,
+        large_blocks: bool = False,
         ssh_connection_id: Optional[str] = None,
         replication_type: str = 'local'
     ) -> int:
@@ -508,6 +509,7 @@ class FileStorageService:
                 'skip_parent': skip_parent,
                 'create_bookmark': create_bookmark,
                 'force_delete': force_delete,
+                'large_blocks': large_blocks,
                 'ssh_connection_id': ssh_connection_id,
                 'replication_type': replication_type,
                 'last_run': None,
@@ -570,6 +572,7 @@ class FileStorageService:
         skip_parent: Optional[bool] = None,
         create_bookmark: Optional[bool] = None,
         force_delete: Optional[bool] = None,
+        large_blocks: Optional[bool] = None,
         ssh_connection_id: Optional[str] = None,
         replication_type: Optional[str] = None
     ) -> bool:
@@ -611,6 +614,8 @@ class FileStorageService:
                         job['create_bookmark'] = create_bookmark
                     if force_delete is not None:
                         job['force_delete'] = force_delete
+                    if large_blocks is not None:
+                        job['large_blocks'] = large_blocks
                     if ssh_connection_id is not None:
                         # Empty string clears the connection (local job)
                         job['ssh_connection_id'] = ssh_connection_id or None

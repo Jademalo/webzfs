@@ -146,6 +146,43 @@ class ZFSDatasetService:
         except subprocess.CalledProcessError as e:
             raise Exception(f"Failed to list datasets: {e.stderr}")
     
+    # zfs send -L is required when any block exceeds 128 KiB
+    LARGE_BLOCK_THRESHOLD_BYTES = 131072
+    
+    def get_large_block_status(self, dataset_name: str) -> Dict[str, Any]:
+        """
+        Check whether a dataset uses blocks larger than 128 KiB.
+        
+        Reads recordsize (filesystems) and volblocksize (volumes) in
+        parseable byte form. Datasets over 128 KiB require zfs send -L
+        (large blocks) to replicate (issue #204).
+        
+        Args:
+            dataset_name: Full name of the dataset
+            
+        Returns:
+            Dictionary with large_blocks flag and the block size in bytes
+        """
+        self.validate_dataset_name(dataset_name)
+        result = run_zfs_command([
+            'zfs', 'get', '-H', '-p', '-o', 'property,value',
+            'recordsize,volblocksize', dataset_name
+        ])
+        
+        block_size_bytes = 0
+        for line in result.stdout.strip().split('\n'):
+            if not line:
+                continue
+            parts = line.split('\t')
+            if len(parts) >= 2 and parts[1].isdigit():
+                block_size_bytes = max(block_size_bytes, int(parts[1]))
+        
+        return {
+            'dataset': dataset_name,
+            'block_size_bytes': block_size_bytes,
+            'large_blocks': block_size_bytes > self.LARGE_BLOCK_THRESHOLD_BYTES
+        }
+    
     def get_dataset(self, dataset_name: str) -> Dict[str, Any]:
         """
         Get detailed information about a specific dataset

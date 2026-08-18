@@ -251,10 +251,13 @@
                             <span class="ml-3 text-text-secondary">Force delete conflicts</span>
                         </label>
                         <label class="flex items-center">
-                            <input type="checkbox" name="dry_run" value="true" class="form-checkbox">
-                            <span class="ml-3 text-text-secondary">Dry run (preview only, no changes)</span>
+                            <input type="checkbox" name="large_blocks" value="true" class="form-checkbox">
+                            <span class="ml-3 text-text-secondary">Large blocks (zfs send -L, for recordsize larger than 128 KiB)</span>
                         </label>
                     </div>
+                    <p id="large-blocks-hint" class="hidden mt-2 text-xs text-info-400">
+                        Large blocks was enabled automatically because the source dataset uses a recordsize larger than 128 KiB.
+                    </p>
                 </div>
 
                 <!-- Actions -->
@@ -496,12 +499,6 @@
                 </svg>
                 <span>Bookmark support for better snapshot management</span>
             </li>
-            <li class="flex items-start">
-                <svg class="w-4 h-4 mr-2 mt-0.5 text-info-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-                </svg>
-                <span>Dry-run mode to preview changes before execution</span>
-            </li>
         </ul>
     </div>
 </div>
@@ -581,9 +578,46 @@
         }
     }
     
+    // Auto-check the Large blocks option when the source dataset uses
+    // a recordsize or volblocksize larger than 128 KiB (zfs send -L).
+    const largeBlocksCheckbox = document.querySelector('input[name="large_blocks"]');
+    const largeBlocksHint = document.getElementById('large-blocks-hint');
+    
+    async function checkLargeBlocks() {
+        if (!largeBlocksCheckbox) return;
+        const dataset = sourceDatasetSelect.value;
+        if (!dataset) {
+            largeBlocksHint.classList.add('hidden');
+            return;
+        }
+        try {
+            const response = await fetch('/zfs/replication/api/check-large-blocks', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    dataset: dataset,
+                    ssh_connection_id: sourceSshSelect.value || null
+                })
+            });
+            const data = await response.json();
+            if (data.success && data.large_blocks) {
+                largeBlocksCheckbox.checked = true;
+                largeBlocksHint.classList.remove('hidden');
+            } else {
+                largeBlocksHint.classList.add('hidden');
+            }
+        } catch (error) {
+            // Non-fatal; the user can still set the option manually
+            largeBlocksHint.classList.add('hidden');
+        }
+    }
+    
+    sourceDatasetSelect.addEventListener('change', checkLargeBlocks);
+    
     // Handle source connection change
     sourceSshSelect.addEventListener('change', function() {
         updateTopologyWarning();
+        largeBlocksHint.classList.add('hidden');
         fetchDatasets(this.value, sourceDatasetSelect, sourceLoading, sourceStatus, true);
     });
     

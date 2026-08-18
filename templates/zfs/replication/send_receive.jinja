@@ -178,6 +178,14 @@
                         <input type="checkbox" name="raw" value="true" class="form-checkbox">
                         <span class="ml-3 text-text-secondary">Raw send (<code class="text-xs bg-bg-elevated-3 px-1 py-0.5 rounded">-w</code> flag, required for encrypted datasets)</span>
                     </label>
+
+                    <label class="flex items-center">
+                        <input type="checkbox" name="large_blocks" value="true" class="form-checkbox">
+                        <span class="ml-3 text-text-secondary">Large blocks (<code class="text-xs bg-bg-elevated-3 px-1 py-0.5 rounded">-L</code> flag, required for datasets with recordsize larger than 128 KiB)</span>
+                    </label>
+                    <p id="large-blocks-hint" class="hidden text-xs text-info-400">
+                        Large blocks was enabled automatically because the source dataset uses a recordsize larger than 128 KiB.
+                    </p>
                 </div>
 
                 <!-- Command Preview -->
@@ -423,7 +431,44 @@ sourceSelect.addEventListener('change', function() {
     if (replicationTypeSelect.value === 'local') {
         loadLocalDatasets();
     }
+    checkLargeBlocks();
 });
+
+// Auto-check the Large blocks option when the source dataset uses a
+// recordsize or volblocksize larger than 128 KiB (zfs send -L).
+// The source here is always a local snapshot; the API strips the
+// @snapshot suffix and checks the underlying dataset.
+const largeBlocksHint = document.getElementById('large-blocks-hint');
+
+async function checkLargeBlocks() {
+    const largeBlocksInput = document.querySelector('input[name="large_blocks"]');
+    if (!largeBlocksInput) return;
+    const source = sourceSelect.value;
+    if (!source) {
+        largeBlocksHint.classList.add('hidden');
+        return;
+    }
+    try {
+        const response = await fetch('/zfs/replication/api/check-large-blocks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dataset: source })
+        });
+        const data = await response.json();
+        if (data.success && data.large_blocks) {
+            largeBlocksInput.checked = true;
+            largeBlocksHint.classList.remove('hidden');
+        } else {
+            largeBlocksHint.classList.add('hidden');
+        }
+        if (typeof updateCommandPreview === 'function') {
+            updateCommandPreview();
+        }
+    } catch (error) {
+        // Non-fatal; the user can still set the option manually
+        largeBlocksHint.classList.add('hidden');
+    }
+}
 
 // Load local datasets (excluding source dataset)
 function loadLocalDatasets() {
@@ -503,6 +548,7 @@ const executeBtn = document.getElementById('execute-btn');
 const incrementalCheckbox = document.querySelector('input[name="incremental"]');
 const recursiveCheckbox = document.querySelector('input[name="recursive"]');
 const rawCheckbox = document.querySelector('input[name="raw"]');
+const largeBlocksCheckbox = document.querySelector('input[name="large_blocks"]');
 const compressionSelect = document.getElementById('compression');
 
 // Build command preview string based on current form state
@@ -524,6 +570,9 @@ function updateCommandPreview() {
     }
     if (rawCheckbox && rawCheckbox.checked) {
         sendParts.push('-w');
+    }
+    if (largeBlocksCheckbox && largeBlocksCheckbox.checked) {
+        sendParts.push('-L');
     }
     if (compressionSelect && compressionSelect.value !== 'none') {
         sendParts.push('-c');
@@ -590,6 +639,7 @@ compressionSelect.addEventListener('change', updateCommandPreview);
 if (incrementalCheckbox) incrementalCheckbox.addEventListener('change', updateCommandPreview);
 if (recursiveCheckbox) recursiveCheckbox.addEventListener('change', updateCommandPreview);
 if (rawCheckbox) rawCheckbox.addEventListener('change', updateCommandPreview);
+if (largeBlocksCheckbox) largeBlocksCheckbox.addEventListener('change', updateCommandPreview);
 if (sshConnectionSelect) sshConnectionSelect.addEventListener('change', updateCommandPreview);
 
 // Initialize on page load

@@ -170,6 +170,7 @@ def _execute_locked_job(
             skip_parent=job.get("skip_parent", False),
             create_bookmark=job.get("create_bookmark", False),
             force_delete=job.get("force_delete", False),
+            send_options="L" if job.get("large_blocks", False) else None,
             source_host=source_host,
             target_host=target_host,
             ssh_port=(

@@ -191,6 +191,7 @@ class ZFSReplicationService:
         incremental: bool = True,
         recursive: bool = False,
         raw: bool = False,
+        large_blocks: bool = False,
         compression: CompressionMethod = CompressionMethod.LZ4,
         job_id: Optional[str] = None,
         job_name: Optional[str] = None,
@@ -208,6 +209,11 @@ class ZFSReplicationService:
             recursive: Replicate recursively
             raw: Use raw send (-w flag). Required for encrypted datasets
                  to preserve encryption on the target side.
+            large_blocks: Use large-block send (-L flag). Allows the
+                 stream to contain blocks larger than 128 KiB. Required
+                 when continuing an incremental chain that was created
+                 with -L, and must remain consistent across incremental
+                 sends for the same target.
             compression: Compression method
             job_id: Optional job ID for scheduled jobs
             job_name: Optional job name
@@ -281,7 +287,7 @@ class ZFSReplicationService:
             # is found below, we rebuild with -i included.
             send_cmd = self._build_send_command(
                 source, latest_snapshot, incremental, recursive, raw,
-                compression, base_snapshot=None
+                large_blocks, compression, base_snapshot=None
             )
             receive_cmd = self._build_receive_command(
                 actual_target, replication_type, options_with_force
@@ -323,7 +329,7 @@ class ZFSReplicationService:
                 # Rebuild the send command now that we have the base snapshot
                 send_cmd = self._build_send_command(
                     source, latest_snapshot, incremental, recursive, raw,
-                    compression, base_snapshot=base_snapshot
+                    large_blocks, compression, base_snapshot=base_snapshot
                 )
                 
                 # Update the stored command string with the actual -i flag
@@ -786,7 +792,8 @@ class ZFSReplicationService:
     
     def _build_send_command(
         self, dataset: str, snapshot: str, incremental: bool,
-        recursive: bool, raw: bool, compression: CompressionMethod,
+        recursive: bool, raw: bool, large_blocks: bool,
+        compression: CompressionMethod,
         base_snapshot: Optional[str] = None
     ) -> List[str]:
         """Build the zfs send command
@@ -798,6 +805,9 @@ class ZFSReplicationService:
             recursive: Whether to include child datasets
             raw: Whether to use raw send (-w). Required for encrypted
                  datasets to preserve encryption on the receiving side.
+            large_blocks: Whether to use large-block send (-L). Allows
+                 blocks larger than 128 KiB in the stream. Must be used
+                 consistently across incremental sends to the same target.
             compression: Compression method
             base_snapshot: For incremental send, the base snapshot to send from
             
@@ -815,6 +825,15 @@ class ZFSReplicationService:
         # preserves the encryption properties.
         if raw:
             cmd.append('-w')
+        
+        # Large-block send (-L) must be explicitly enabled by the user.
+        # It allows the stream to contain blocks larger than 128 KiB and
+        # is required when continuing an incremental replication chain
+        # that was originally created with -L (issue #204). OpenZFS warns
+        # that this flag must be used consistently across incremental
+        # sends, so it is never toggled automatically.
+        if large_blocks:
+            cmd.append('-L')
         
         # Add compressed send if compression is not NONE
         if compression != CompressionMethod.NONE:

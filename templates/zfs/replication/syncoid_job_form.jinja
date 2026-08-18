@@ -190,7 +190,14 @@
                             <input type="checkbox" name="force_delete" value="true" class="form-checkbox" {% if job and job.force_delete %}checked{% endif %}>
                             <span class="ml-3 text-text-secondary">Force delete conflicts</span>
                         </label>
+                        <label class="flex items-center">
+                            <input type="checkbox" name="large_blocks" value="true" class="form-checkbox" {% if job and job.large_blocks %}checked{% endif %}>
+                            <span class="ml-3 text-text-secondary">Large blocks (zfs send -L, for recordsize larger than 128 KiB)</span>
+                        </label>
                     </div>
+                    <p id="large-blocks-hint" class="hidden mt-2 text-xs text-info-400">
+                        Large blocks was enabled automatically because the source dataset uses a recordsize larger than 128 KiB.
+                    </p>
                 </div>
 
                 <!-- Actions -->
@@ -283,6 +290,53 @@
     });
 
     validateSchedule();
+
+    // Auto-check the Large blocks option when the source dataset uses
+    // a recordsize or volblocksize larger than 128 KiB (zfs send -L).
+    // For pull jobs the source lives on the remote system, so the
+    // selected SSH connection is passed for the lookup.
+    const sourceDatasetInput = document.getElementById('source_dataset');
+    const sshConnectionSelect = document.getElementById('ssh_connection_id');
+    const largeBlocksCheckbox = document.querySelector('input[name="large_blocks"]');
+    const largeBlocksHint = document.getElementById('large-blocks-hint');
+    let largeBlocksTimer = null;
+
+    async function checkLargeBlocks() {
+        if (!largeBlocksCheckbox) return;
+        const dataset = sourceDatasetInput.value.trim();
+        if (!dataset) {
+            largeBlocksHint.classList.add('hidden');
+            return;
+        }
+        const sourceIsRemote = typeSelect.value === 'pull';
+        try {
+            const response = await fetch('/zfs/replication/api/check-large-blocks', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    dataset: dataset,
+                    ssh_connection_id: sourceIsRemote ? (sshConnectionSelect.value || null) : null
+                })
+            });
+            const data = await response.json();
+            if (data.success && data.large_blocks) {
+                largeBlocksCheckbox.checked = true;
+                largeBlocksHint.classList.remove('hidden');
+            } else {
+                largeBlocksHint.classList.add('hidden');
+            }
+        } catch (err) {
+            // Non-fatal; the user can still set the option manually
+            largeBlocksHint.classList.add('hidden');
+        }
+    }
+
+    sourceDatasetInput.addEventListener('input', function() {
+        clearTimeout(largeBlocksTimer);
+        largeBlocksTimer = setTimeout(checkLargeBlocks, 600);
+    });
+    sshConnectionSelect.addEventListener('change', checkLargeBlocks);
+    typeSelect.addEventListener('change', checkLargeBlocks);
 })();
 </script>
 {% endblock %}

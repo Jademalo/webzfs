@@ -44,15 +44,19 @@ class SanoidService:
     
     def _write_config(self, config: configparser.ConfigParser) -> None:
         """
-        Safely write the sanoid configuration file.
+        Dont be a dumdum and safely write the sanoid configuration file.
         
         Renders the configuration to a string, validates it by re-parsing,
-        then writes it. If the config file or its parent directory is not
-        directly writable (fresh Debian installs have no /etc/sanoid at
-        all, and the file is normally root-owned), the write goes through
-        the privileged path in services/file.py which uses sudo mkdir and
-        sudo tee. Those commands are already granted to the webzfs user
-        in the Linux sudoers configuration.
+        then writes it. The direct write is attempted first (EAFP) using a
+        temporary file in the same directory followed by an atomic
+        os.replace, so a mid-write failure (for example a full disk) never
+        leaves a truncated sanoid.conf.
+        
+        If the direct write fails (fresh Debian installs have no
+        /etc/sanoid at all, and the file is normally root-owned), the
+        write falls back to the privileged path in services/file.py which
+        uses sudo mkdir and sudo tee. Those commands are already granted
+        to the webzfs user in the Linux sudoers configuration.
         
         Args:
             config: The ConfigParser object to write
@@ -74,18 +78,30 @@ class SanoidService:
         except configparser.Error as e:
             raise Exception(f"Generated configuration failed validation: {str(e)}")
         
-        # Determine whether a direct write is possible
         config_file = str(self.config_path)
-        parent_dir = self.config_path.parent
-        if self.config_path.exists():
-            directly_writable = os.access(config_file, os.W_OK)
-        else:
-            directly_writable = parent_dir.is_dir() and os.access(str(parent_dir), os.W_OK)
         
-        if directly_writable:
-            with open(config_file, 'w') as f:
+        # Attempt a direct atomic write first. Writing to a temp file in
+        # the same directory and renaming it over the config means the
+        # live file is either the old version or the complete new
+        # version, never a partial write.
+        temp_file = config_file + '.webzfs.tmp'
+        try:
+            with open(temp_file, 'w') as f:
                 f.write(content)
-        elif is_linux():
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_file, config_file)
+            return
+        except OSError:
+            # PermissionError (root-owned file or directory),
+            # FileNotFoundError (missing /etc/sanoid), disk full, etc.
+            # Clean up any leftover temp file before falling back.
+            try:
+                os.unlink(temp_file)
+            except OSError:
+                pass
+        
+        if is_linux():
             # Privileged write path: sudo mkdir -p + sudo tee.
             # Creates /etc/sanoid and sanoid.conf root-owned without
             # making them writable by the webzfs user.
@@ -320,7 +336,7 @@ class SanoidService:
             config = configparser.ConfigParser()
             config.read(self.config_path)
             
-            section_name = template_name if template_name.startswith('template_') else f"template_{template_name}"
+            section_name = template_name if template_name.startswith('template_') else f"template_s{template_name}"
             
             if not config.has_section(section_name):
                 raise Exception(f"Template {template_name} not found")

@@ -157,6 +157,7 @@ async def send_receive_execute(
     incremental: Annotated[bool, Form()] = False,
     recursive: Annotated[bool, Form()] = False,
     raw: Annotated[bool, Form()] = False,
+    large_blocks: Annotated[bool, Form()] = False,
     compression: Annotated[str, Form()] = "lz4",
     remote_host: Annotated[str, Form()] = "",
     remote_port: Annotated[int, Form()] = 22,
@@ -201,6 +202,7 @@ async def send_receive_execute(
                 'incremental': incremental,
                 'recursive': recursive,
                 'raw': raw,
+                'large_blocks': large_blocks,
                 'compression': comp_method,
                 'job_name': job_name,
                 **options
@@ -319,9 +321,9 @@ async def syncoid_execute(
     skip_parent: Annotated[bool, Form()] = False,
     create_bookmark: Annotated[bool, Form()] = False,
     force_delete: Annotated[bool, Form()] = False,
+    large_blocks: Annotated[bool, Form()] = False,
     source_ssh_connection_id: Annotated[str, Form()] = "",
-    target_ssh_connection_id: Annotated[str, Form()] = "",
-    dry_run: Annotated[bool, Form()] = False
+    target_ssh_connection_id: Annotated[str, Form()] = ""
 ):
     """Execute syncoid replication.
 
@@ -368,12 +370,12 @@ async def syncoid_execute(
             skip_parent=skip_parent,
             create_bookmark=create_bookmark,
             force_delete=force_delete,
+            send_options="L" if large_blocks else None,
             source_host=source_host,
             target_host=target_host,
             ssh_port=ssh_profile['port'] if ssh_profile and ssh_profile['port'] != 22 else None,
             ssh_key=ssh_profile['identity_file'] if ssh_profile else None,
-            ssh_options=ssh_profile['ssh_options'] if ssh_profile else None,
-            dry_run=dry_run
+            ssh_options=ssh_profile['ssh_options'] if ssh_profile else None
         )
         
         return templates.TemplateResponse(
@@ -640,6 +642,86 @@ async def get_remote_datasets(data: Dict = Body(...)):
                 "error": f"Failed to fetch datasets: {str(e)}"
             })
             
+    except Exception as e:
+        return JSONResponse({
+            "success": False,
+            "error": str(e)
+        })
+
+
+@router.post("/api/check-large-blocks")
+async def check_large_blocks(data: Dict = Body(...)):
+    """API endpoint that reports whether a dataset needs zfs send -L.
+
+    Checks recordsize (filesystems) and volblocksize (volumes). Values
+    above 128 KiB require the large-block send flag (issue #204). The
+    replication forms call this when a source dataset is selected so
+    the Large blocks checkbox can be pre-checked automatically.
+
+    Accepts an optional ssh_connection_id to check datasets on a
+    remote system through the managed SSH connection.
+    """
+    try:
+        import subprocess
+
+        dataset = (data.get('dataset') or '').strip()
+        if not dataset:
+            return JSONResponse({
+                "success": False,
+                "error": "Dataset name is required"
+            })
+
+        # Snapshots inherit block size from their dataset
+        dataset = dataset.split('@')[0]
+
+        ssh_connection_id = data.get('ssh_connection_id')
+        if ssh_connection_id:
+            connection = ssh_service.get_connection(ssh_connection_id)
+            if not connection:
+                return JSONResponse({
+                    "success": False,
+                    "error": "SSH connection not found"
+                })
+            # Validate the name locally before it is sent to a shell
+            dataset_service.validate_dataset_name(dataset)
+            ssh_service.ensure_host_key_trusted(connection['host'], connection['port'])
+            ssh_cmd = [
+                'ssh',
+                '-i', connection['private_key_path'],
+                '-p', str(connection['port']),
+                '-o', 'BatchMode=yes',
+                '-o', 'ConnectTimeout=10',
+            ]
+            for ssh_option in ssh_service.get_host_key_options():
+                ssh_cmd.extend(['-o', ssh_option])
+            ssh_cmd.extend([
+                f"{connection['username']}@{connection['host']}",
+                'zfs', 'get', '-H', '-p', '-o', 'property,value',
+                'recordsize,volblocksize', dataset
+            ])
+            process = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=30)
+            if process.returncode != 0:
+                return JSONResponse({
+                    "success": False,
+                    "error": process.stderr or "Failed to read block size"
+                })
+            block_size_bytes = 0
+            for line in process.stdout.strip().split('\n'):
+                parts = line.split('\t')
+                if len(parts) >= 2 and parts[1].isdigit():
+                    block_size_bytes = max(block_size_bytes, int(parts[1]))
+            return JSONResponse({
+                "success": True,
+                "dataset": dataset,
+                "block_size_bytes": block_size_bytes,
+                "large_blocks": block_size_bytes > dataset_service.LARGE_BLOCK_THRESHOLD_BYTES
+            })
+
+        status = dataset_service.get_large_block_status(dataset)
+        return JSONResponse({
+            "success": True,
+            **status
+        })
     except Exception as e:
         return JSONResponse({
             "success": False,
@@ -1087,6 +1169,7 @@ async def syncoid_job_save(
     skip_parent: Annotated[bool, Form()] = False,
     create_bookmark: Annotated[bool, Form()] = False,
     force_delete: Annotated[bool, Form()] = False,
+    large_blocks: Annotated[bool, Form()] = False,
 ):
     """Create or update a scheduled Syncoid job and register it with
     the OS scheduler (systemd timer on Linux, root crontab on BSD)."""
@@ -1107,6 +1190,7 @@ async def syncoid_job_save(
         "skip_parent": skip_parent,
         "create_bookmark": create_bookmark,
         "force_delete": force_delete,
+        "large_blocks": large_blocks,
     }
 
     try:
@@ -1149,6 +1233,7 @@ async def syncoid_job_save(
                 skip_parent=skip_parent,
                 create_bookmark=create_bookmark,
                 force_delete=force_delete,
+                large_blocks=large_blocks,
                 ssh_connection_id=ssh_connection_id,
                 replication_type=replication_type,
             )
@@ -1172,6 +1257,7 @@ async def syncoid_job_save(
                 skip_parent=skip_parent,
                 create_bookmark=create_bookmark,
                 force_delete=force_delete,
+                large_blocks=large_blocks,
                 ssh_connection_id=ssh_connection_id or None,
                 replication_type=replication_type,
             )

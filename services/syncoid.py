@@ -16,6 +16,11 @@ from services.utils import run_privileged_command, run_zfs_command
 class SyncoidService:
     """Service for managing syncoid replication operations"""
     
+    # Allowlisted zfs send option letters that may be passed to syncoid
+    # via --sendoptions. Only options known to be safe single-letter
+    # zfs send flags are permitted; arbitrary user text is rejected.
+    ALLOWED_SEND_OPTIONS = {'L', 'e', 'c', 'w', 'p'}
+    
     # Common paths where syncoid might be installed.
     # Checked as fallback when 'which' fails (e.g. restricted PATH on FreeBSD services).
     COMMON_PATHS = [
@@ -122,11 +127,11 @@ class SyncoidService:
         ssh_port: Optional[int] = None,
         ssh_key: Optional[str] = None,
         ssh_options: Optional[List[str]] = None,
+        send_options: Optional[str] = None,
         source_host: Optional[str] = None,
         target_host: Optional[str] = None,
         debug: bool = False,
         quiet: bool = False,
-        dry_run: bool = False,
         **additional_options
     ) -> Dict[str, Any]:
         """
@@ -153,11 +158,14 @@ class SyncoidService:
             ssh_options: List of SSH -o option strings passed via
                          --sshoption (e.g. ['IdentitiesOnly=yes',
                          'StrictHostKeyChecking=yes']).
+            send_options: ZFS send option letters passed to syncoid via
+                          --sendoptions (e.g. 'L' for large-block send).
+                          Validated against ALLOWED_SEND_OPTIONS; any
+                          other value is rejected (issue #204).
             source_host: Source SSH host (alternative to including in source string)
             target_host: Target SSH host (alternative to including in target string)
             debug: Enable debug output
             quiet: Quiet mode
-            dry_run: Dry run mode (no changes made)
             **additional_options: Additional syncoid options
             
         Returns:
@@ -221,14 +229,27 @@ class SyncoidService:
                 for option in ssh_options:
                     cmd.extend(['--sshoption', option])
             
+            if send_options:
+                # Validate against the allowlist. Each character must be
+                # a known safe zfs send flag letter. This prevents
+                # arbitrary command text from being passed through.
+                invalid = [c for c in send_options if c not in self.ALLOWED_SEND_OPTIONS]
+                if invalid:
+                    return {
+                        'success': False,
+                        'error': (
+                            f"Invalid send option(s): {''.join(invalid)}. "
+                            f"Allowed options: "
+                            f"{''.join(sorted(self.ALLOWED_SEND_OPTIONS))}"
+                        )
+                    }
+                cmd.append(f'--sendoptions={send_options}')
+            
             if debug:
                 cmd.append('--debug')
             
             if quiet:
                 cmd.append('--quiet')
-            
-            if dry_run:
-                cmd.append('--dryrun')
             
             # Build source string
             if source_host:
