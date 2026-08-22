@@ -320,14 +320,14 @@
                             class="form-select"
                         >
                             <option value="">Default (inherit)</option>
-                            <option value="none" {% if normalization == 'none' %}selected{% endif %}>none</option>
-                            <option value="formC" {% if normalization == 'formC' %}selected{% endif %}>formC</option>
-                            <option value="formD" {% if normalization == 'formD' %}selected{% endif %}>formD (recommended for macOS clients)</option>
-                            <option value="formKC" {% if normalization == 'formKC' %}selected{% endif %}>formKC</option>
-                            <option value="formKD" {% if normalization == 'formKD' %}selected{% endif %}>formKD</option>
+                            <option value="none" {% if normalization == 'none' %}selected{% endif %}>none - no normalization, names compared byte for byte</option>
+                            <option value="formC" {% if normalization == 'formC' %}selected{% endif %}>formC - composed (e with accent stored as one character)</option>
+                            <option value="formD" {% if normalization == 'formD' %}selected{% endif %}>formD - decomposed (e plus accent stored separately, matches macOS)</option>
+                            <option value="formKC" {% if normalization == 'formKC' %}selected{% endif %}>formKC - composed, also treats lookalike characters as equal</option>
+                            <option value="formKD" {% if normalization == 'formKD' %}selected{% endif %}>formKD - decomposed, also treats lookalike characters as equal</option>
                         </select>
                         <p class="text-text-tertiary text-sm mt-1">
-                            Unicode normalization applied when comparing file names. Selecting any form other than none implies UTF-8 only file names.
+                            Some accented characters can be written in Unicode in more than one way. Normalization makes ZFS treat these different spellings as the same file name. Choose formD for datasets shared with macOS clients, formC for general cross-platform use, or none if all clients are Linux/BSD. Selecting any form other than none implies UTF-8 only file names.
                         </p>
                     </div>
 
