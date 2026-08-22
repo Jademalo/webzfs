@@ -1,18 +1,19 @@
 """
 ZFS Replication Management Service
-Handles snapshot replication scheduling and execution similar to syncoid/sanoid
+Handles one-shot native ZFS send/receive execution with history tracking.
+Scheduled replication is handled by Syncoid jobs (services/storage.py,
+services/syncoid_runner.py, services/job_scheduler.py).
 Reference: https://github.com/jimsalterjrs/sanoid
 Hi Jim. :)
 """
 import subprocess
-import json
 import time
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from enum import Enum
 from services.storage import FileStorageService
 from services.email_notification import EmailNotificationService
-from services.utils import run_zfs_command, build_zfs_command, run_zfs_command_with_pipe
+from services.utils import run_zfs_command, build_zfs_command
 
 
 class ReplicationType(Enum):
@@ -35,137 +36,9 @@ class ZFSReplicationService:
     
     def __init__(self):
         """Initialize the replication service"""
-        # Note: Job configuration is currently stored in-memory
-        # TODO: Consider persisting job config to JSON files if needed
-        self._jobs = {}
-        self._history = []
-        
         # Initialize file storage and email services
         self.storage = FileStorageService()
         self.email = EmailNotificationService()
-    
-    def list_replication_jobs(self) -> List[Dict[str, Any]]:
-        """
-        List all configured replication jobs
-        
-        Returns:
-            List of replication job configurations
-        """
-        return list(self._jobs.values())
-    
-    def get_replication_job(self, job_id: str) -> Dict[str, Any]:
-        """
-        Get details of a specific replication job
-        
-        Args:
-            job_id: Unique identifier for the job
-            
-        Returns:
-            Job configuration dictionary
-            
-        Raises:
-            KeyError: If job_id not found
-        """
-        if job_id not in self._jobs:
-            raise KeyError(f"Replication job {job_id} not found")
-        return self._jobs[job_id]
-    
-    def create_replication_job(
-        self,
-        name: str,
-        source_dataset: str,
-        target_dataset: str,
-        replication_type: ReplicationType,
-        schedule: str,
-        enabled: bool = True,
-        recursive: bool = False,
-        compression: CompressionMethod = CompressionMethod.LZ4,
-        **options
-    ) -> str:
-        """
-        Create a new replication job
-        
-        Args:
-            name: Human-readable name for the job
-            source_dataset: Source ZFS dataset
-            target_dataset: Target ZFS dataset
-            replication_type: Type of replication (push/pull/local)
-            schedule: Cron-style schedule expression
-            enabled: Whether job is enabled
-            recursive: Replicate child datasets recursively
-            compression: Compression method to use
-            **options: Additional options:
-                - remote_host: str (for push/pull)
-                - remote_port: int
-                - ssh_key: str
-                - bandwidth_limit: str
-                - skip_parent: bool
-                - preserve_properties: bool
-                - use_bookmarks: bool
-                - force: bool (use -F flag on receive)
-                
-        Returns:
-            job_id: Unique identifier for the created job
-        """
-        import uuid
-        job_id = str(uuid.uuid4())
-        
-        job = {
-            'id': job_id,
-            'name': name,
-            'source_dataset': source_dataset,
-            'target_dataset': target_dataset,
-            'replication_type': replication_type.value,
-            'schedule': schedule,
-            'enabled': enabled,
-            'recursive': recursive,
-            'compression': compression.value,
-            'options': options,
-            'created_at': datetime.now().isoformat(),
-            'updated_at': datetime.now().isoformat(),
-        }
-        
-        self._jobs[job_id] = job
-        return job_id
-    
-    def update_replication_job(self, job_id: str, **updates) -> None:
-        """
-        Update an existing replication job
-        
-        Args:
-            job_id: Job identifier
-            **updates: Fields to update
-        """
-        if job_id not in self._jobs:
-            raise KeyError(f"Replication job {job_id} not found")
-        
-        # Handle enum conversions
-        if 'replication_type' in updates and isinstance(updates['replication_type'], str):
-            updates['replication_type'] = updates['replication_type']
-        if 'compression' in updates and isinstance(updates['compression'], str):
-            updates['compression'] = updates['compression']
-        
-        self._jobs[job_id].update(updates)
-        self._jobs[job_id]['updated_at'] = datetime.now().isoformat()
-    
-    def delete_replication_job(self, job_id: str) -> None:
-        """
-        Delete a replication job
-        
-        Args:
-            job_id: Job identifier
-        """
-        if job_id not in self._jobs:
-            raise KeyError(f"Replication job {job_id} not found")
-        del self._jobs[job_id]
-    
-    def enable_job(self, job_id: str) -> None:
-        """Enable a replication job"""
-        self.update_replication_job(job_id, enabled=True)
-    
-    def disable_job(self, job_id: str) -> None:
-        """Disable a replication job"""
-        self.update_replication_job(job_id, enabled=False)
     
     def _check_target_exists(self, target: str) -> bool:
         """
@@ -454,31 +327,6 @@ class ZFSReplicationService:
                 'error': error_message,
                 'execution_id': execution_id
             }
-    
-    def get_replication_status(self, job_id: str) -> Dict[str, Any]:
-        """
-        Get current status of a replication job
-        
-        Args:
-            job_id: Job identifier
-            
-        Returns:
-            Status information including last run, next run, etc.
-        """
-        job = self.get_replication_job(job_id)
-        
-        # Get last execution from history
-        job_history = [h for h in self._history if h.get('job_id') == job_id]
-        last_run = job_history[-1] if job_history else None
-        
-        return {
-            'job_id': job_id,
-            'name': job['name'],
-            'enabled': job['enabled'],
-            'last_run': last_run.get('started_at') if last_run else None,
-            'last_status': last_run.get('status') if last_run else None,
-            'next_run': self._calculate_next_run(job['schedule']),
-        }
     
     def get_replication_history(
         self,
@@ -1168,11 +1016,6 @@ class ZFSReplicationService:
             'speed': 'N/A',
             'log_output': log_output
         }
-    
-    def _calculate_next_run(self, schedule: str) -> Optional[str]:
-        """Calculate next run time from cron schedule"""
-        # Simplified implementation - would use croniter in production
-        return "Next run calculation not implemented"
     
     def _format_bytes(self, bytes: int) -> str:
         """Format bytes to human-readable string"""

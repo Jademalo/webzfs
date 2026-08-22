@@ -4,6 +4,7 @@ Wrapper for syncoid command-line tool for ZFS replication
 Reference: https://github.com/jimsalterjrs/sanoid
 Hi Jim. :)
 """
+import os
 import subprocess
 import json
 import shlex
@@ -289,6 +290,34 @@ class SyncoidService:
                 'error': str(e)
             }
     
+    def _build_syncoid_environment(self) -> Dict[str, str]:
+        """
+        Build the environment for the syncoid subprocess with an
+        augmented PATH.
+        
+        Syncoid probes for its optional helper binaries (pv, lzop,
+        mbuffer, gzip, zstd) using the PATH it inherits. Restricted
+        environments such as FreeBSD rc.d services and cron jobs run
+        with a minimal PATH that excludes /usr/local/bin, so syncoid
+        reports the helpers as unavailable even when they are installed.
+        Appending the standard system and local binary directories to
+        PATH lets syncoid find them regardless of how WebZFS was started.
+        
+        Returns:
+            Copy of the current environment with PATH augmented.
+        """
+        standard_paths = [
+            '/usr/local/sbin', '/usr/local/bin',
+            '/usr/sbin', '/usr/bin', '/sbin', '/bin'
+        ]
+        env = dict(os.environ)
+        path_parts = [p for p in env.get('PATH', '').split(':') if p]
+        for path_entry in standard_paths:
+            if path_entry not in path_parts:
+                path_parts.append(path_entry)
+        env['PATH'] = ':'.join(path_parts)
+        return env
+    
     def _run_syncoid(self, cmd: List[str]) -> tuple:
         """
         Execute a syncoid command with the current privilege policy.
@@ -298,6 +327,11 @@ class SyncoidService:
         A future least-privilege change (run syncoid as the webzfs user
         with only ZFS subcommands elevated) only needs to modify this
         method.
+        
+        The subprocess environment PATH is augmented with the standard
+        system and local binary directories so syncoid can find its
+        helper tools (pv, lzop, mbuffer) under restricted PATH
+        environments such as FreeBSD rc.d services and cron jobs.
         
         Args:
             cmd: The syncoid command and arguments (without sudo)
@@ -314,7 +348,8 @@ class SyncoidService:
             full_cmd,
             check=False,
             text=True,
-            capture_output=True
+            capture_output=True,
+            env=self._build_syncoid_environment()
         )
         # Report the actual executed argv (including sudo when used) so
         # troubleshooting reflects the real execution identity.
