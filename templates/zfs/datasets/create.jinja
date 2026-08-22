@@ -280,6 +280,77 @@
                     </p>
                 </div>
 
+                <!-- Creation-Only Filesystem Properties -->
+                <div x-show="datasetType === 'filesystem'" x-transition class="space-y-6 border-t border-border-subtle pt-6">
+                    <div>
+                        <h3 class="text-lg font-semibold text-text-primary mb-1">Creation-Only Properties</h3>
+                        <p class="text-text-secondary text-sm">
+                            These properties cannot be changed after the dataset is created. Leave at Default to inherit from the parent dataset.
+                        </p>
+                    </div>
+
+                    <!-- Case Sensitivity -->
+                    <div>
+                        <label for="casesensitivity" class="form-label">
+                            Case Sensitivity
+                        </label>
+                        <select 
+                            id="casesensitivity" 
+                            name="casesensitivity"
+                            class="form-select"
+                        >
+                            <option value="">Default (inherit)</option>
+                            <option value="sensitive" {% if casesensitivity == 'sensitive' %}selected{% endif %}>sensitive (POSIX standard)</option>
+                            <option value="insensitive" {% if casesensitivity == 'insensitive' %}selected{% endif %}>insensitive (Windows/SMB style)</option>
+                            <option value="mixed" {% if casesensitivity == 'mixed' %}selected{% endif %}>mixed</option>
+                        </select>
+                        <p class="text-text-tertiary text-sm mt-1">
+                            Controls whether file names are case sensitive. Use insensitive or mixed for SMB shares accessed by Windows clients.
+                        </p>
+                    </div>
+
+                    <!-- Normalization -->
+                    <div>
+                        <label for="normalization" class="form-label">
+                            Unicode Normalization
+                        </label>
+                        <select 
+                            id="normalization" 
+                            name="normalization"
+                            class="form-select"
+                        >
+                            <option value="">Default (inherit)</option>
+                            <option value="none" {% if normalization == 'none' %}selected{% endif %}>none</option>
+                            <option value="formC" {% if normalization == 'formC' %}selected{% endif %}>formC</option>
+                            <option value="formD" {% if normalization == 'formD' %}selected{% endif %}>formD (recommended for macOS clients)</option>
+                            <option value="formKC" {% if normalization == 'formKC' %}selected{% endif %}>formKC</option>
+                            <option value="formKD" {% if normalization == 'formKD' %}selected{% endif %}>formKD</option>
+                        </select>
+                        <p class="text-text-tertiary text-sm mt-1">
+                            Unicode normalization applied when comparing file names. Selecting any form other than none implies UTF-8 only file names.
+                        </p>
+                    </div>
+
+                    <!-- UTF-8 Only -->
+                    <div>
+                        <label for="utf8only" class="form-label">
+                            UTF-8 Only File Names
+                        </label>
+                        <select 
+                            id="utf8only" 
+                            name="utf8only"
+                            class="form-select"
+                        >
+                            <option value="">Default (inherit)</option>
+                            <option value="on" {% if utf8only == 'on' %}selected{% endif %}>on</option>
+                            <option value="off" {% if utf8only == 'off' %}selected{% endif %}>off</option>
+                        </select>
+                        <p class="text-text-tertiary text-sm mt-1">
+                            Reject file names that are not valid UTF-8. Cannot be off when a normalization form other than none is selected.
+                        </p>
+                    </div>
+                </div>
+
                 <!-- Encryption -->
                 <div>
                     <label for="encryption" class="form-label">
@@ -386,7 +457,7 @@
                                 <li>Dataset names must be unique within the pool</li>
                                 <li>Parent datasets must exist (or will be created automatically)</li>
                                 <li>Volumes (zvols) require a size specification</li>
-                                <li>Properties can be changed after creation</li>
+                                <li>Most properties can be changed after creation, except case sensitivity, normalization, and UTF-8 only which are fixed at creation time</li>
                             </ul>
                         </div>
                     </div>

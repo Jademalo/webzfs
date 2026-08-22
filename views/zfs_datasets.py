@@ -2,6 +2,8 @@
 ZFS Dataset Management Views
 Provides web interface for ZFS dataset operations
 """
+from urllib.parse import quote
+
 from fastapi import APIRouter, Request, Form, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse
 from typing import Annotated, Optional
@@ -136,6 +138,9 @@ async def create_dataset(
     recordsize: Annotated[str, Form()] = "",
     atime: Annotated[str, Form()] = "off",
     volsize: Annotated[str, Form()] = "",
+    casesensitivity: Annotated[str, Form()] = "",
+    normalization: Annotated[str, Form()] = "",
+    utf8only: Annotated[str, Form()] = "",
     encryption: Annotated[str, Form()] = "",
     passphrase: Annotated[str, Form()] = "",
     passphrase_confirm: Annotated[str, Form()] = "",
@@ -169,6 +174,22 @@ async def create_dataset(
                 properties['mountpoint'] = mountpoint
             if atime:
                 properties['atime'] = atime
+            
+            # Creation-only filesystem properties (issue #207).
+            # These cannot be changed after creation, so they are only
+            # accepted here. Empty values mean inherit from parent.
+            if normalization and normalization != 'none' and utf8only == 'off':
+                raise Exception(
+                    "Invalid combination: utf8only cannot be off when "
+                    f"normalization is {normalization}. Normalization "
+                    "requires UTF-8 only file names."
+                )
+            if casesensitivity:
+                properties['casesensitivity'] = casesensitivity
+            if normalization:
+                properties['normalization'] = normalization
+            if utf8only:
+                properties['utf8only'] = utf8only
         
         # Common properties
         if compression:
@@ -215,6 +236,9 @@ async def create_dataset(
                 "recordsize": recordsize,
                 "atime": atime,
                 "volsize": volsize,
+                "casesensitivity": casesensitivity,
+                "normalization": normalization,
+                "utf8only": utf8only,
                 "encryption": encryption,
                 "supports_encryption": supports_encryption,
                 "page_title": "Create Dataset"
@@ -283,7 +307,7 @@ async def set_dataset_property(
             success=False, error=str(e)
         )
         return RedirectResponse(
-            url=f"/zfs/datasets/{dataset_path}/properties?error={str(e)}",
+            url=f"/zfs/datasets/{dataset_path}/properties?error={quote(str(e))}",
             status_code=303
         )
 

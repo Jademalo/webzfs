@@ -73,7 +73,10 @@
 
     <!-- Properties Table -->
     {% if properties %}
-    {% set editable_props = ['atime', 'relatime', 'compression', 'dedup', 'checksum', 'copies', 'quota', 'refquota', 'reservation', 'refreservation', 'recordsize', 'sync', 'readonly', 'exec', 'setuid', 'devices', 'snapdir', 'aclmode', 'aclinherit', 'canmount', 'xattr', 'nbmand', 'vscan', 'utf8only', 'normalization', 'casesensitivity', 'primarycache', 'secondarycache', 'logbias', 'redundant_metadata', 'snapdev', 'mountpoint', 'sharenfs', 'sharesmb'] %}
+    {% set editable_props = ['atime', 'relatime', 'compression', 'dedup', 'checksum', 'copies', 'quota', 'refquota', 'reservation', 'refreservation', 'recordsize', 'sync', 'readonly', 'exec', 'setuid', 'devices', 'snapdir', 'aclmode', 'aclinherit', 'canmount', 'xattr', 'nbmand', 'vscan', 'primarycache', 'secondarycache', 'logbias', 'redundant_metadata', 'snapdev', 'mountpoint', 'sharenfs', 'sharesmb'] %}
+
+    <!-- Properties that OpenZFS only allows at dataset creation time -->
+    {% set creation_only_props = ['casesensitivity', 'normalization', 'utf8only'] %}
     
     <!-- Define property options -->
     {% set property_options = {
@@ -95,7 +98,6 @@
         'xattr': ['on', 'off', 'sa'],
         'nbmand': ['on', 'off'],
         'vscan': ['on', 'off'],
-        'utf8only': ['on', 'off'],
         'primarycache': ['all', 'none', 'metadata'],
         'secondarycache': ['all', 'none', 'metadata'],
         'logbias': ['latency', 'throughput'],
@@ -201,6 +203,13 @@
                                     Update
                                 </button>
                             </form>
+                            {% elif prop_name in creation_only_props %}
+                            <span class="text-text-tertiary text-xs italic inline-flex items-center gap-1">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+                                </svg>
+                                Creation-only property
+                            </span>
                             {% else %}
                             <span class="text-text-tertiary text-xs italic inline-flex items-center gap-1">
                                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
