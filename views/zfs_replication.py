@@ -273,7 +273,6 @@ async def syncoid_index(request: Request):
     """Display syncoid operations dashboard"""
     try:
         syncoid_status = syncoid_service.check_syncoid_status()
-        datasets = dataset_service.list_datasets()
         ssh_connections = ssh_service.list_connections()
         scheduled_jobs = _annotate_jobs(storage_service.get_syncoid_jobs())
         
@@ -285,7 +284,6 @@ async def syncoid_index(request: Request):
             name="zfs/replication/syncoid.jinja",
             context={
                 "syncoid_status": syncoid_status,
-                "datasets": datasets,
                 "ssh_connections": ssh_connections,
                 "scheduled_jobs": scheduled_jobs,
                 "system": system,
@@ -298,174 +296,11 @@ async def syncoid_index(request: Request):
             name="zfs/replication/syncoid.jinja",
             context={
                 "syncoid_status": {'installed': False},
-                "datasets": [],
                 "ssh_connections": [],
                 "scheduled_jobs": [],
                 "system": platform.system(),
                 "error": str(e),
                 "page_title": "Syncoid Replication"
-            }
-        )
-
-
-@router.post("/syncoid/execute", response_class=HTMLResponse)
-async def syncoid_execute(
-    request: Request,
-    source: Annotated[str, Form()],
-    target: Annotated[str, Form()],
-    recursive: Annotated[bool, Form()] = False,
-    no_sync_snap: Annotated[bool, Form()] = False,
-    compress: Annotated[str, Form()] = "",
-    source_bwlimit: Annotated[str, Form()] = "",
-    target_bwlimit: Annotated[str, Form()] = "",
-    skip_parent: Annotated[bool, Form()] = False,
-    create_bookmark: Annotated[bool, Form()] = False,
-    force_delete: Annotated[bool, Form()] = False,
-    large_blocks: Annotated[bool, Form()] = False,
-    source_ssh_connection_id: Annotated[str, Form()] = "",
-    target_ssh_connection_id: Annotated[str, Form()] = ""
-):
-    """Execute syncoid replication.
-
-    Remote endpoints are resolved server side from the selected SSH
-    Manager connection IDs. The managed connection record is the single
-    source of truth for username, host, port, and private key, so the
-    browser cannot override the SSH destination or identity (issue #195).
-    """
-    try:
-        # Syncoid supports one global --sshkey and --sshport per command.
-        # Two different remote connections cannot be represented, so
-        # reject that topology explicitly instead of silently using one
-        # side's key for both.
-        if (
-            source_ssh_connection_id
-            and target_ssh_connection_id
-            and source_ssh_connection_id != target_ssh_connection_id
-        ):
-            raise Exception(
-                "Remote-to-remote replication between two different SSH "
-                "connections is not supported yet. One side must be Local, "
-                "or both sides must use the same SSH connection."
-            )
-
-        # Resolve the managed connection (if any) into an SSH profile
-        # containing user@host, port, key path, and strict host key options.
-        ssh_profile = None
-        active_connection_id = source_ssh_connection_id or target_ssh_connection_id
-        if active_connection_id:
-            ssh_profile = ssh_service.build_syncoid_profile(active_connection_id)
-            ssh_service.mark_connection_used(active_connection_id, 'replication')
-
-        source_host = ssh_profile['host_string'] if source_ssh_connection_id else None
-        target_host = ssh_profile['host_string'] if target_ssh_connection_id else None
-
-        result = syncoid_service.execute_replication(
-            source=source,
-            target=target,
-            recursive=recursive,
-            no_sync_snap=no_sync_snap,
-            compress=compress if compress else None,
-            source_bwlimit=source_bwlimit if source_bwlimit else None,
-            target_bwlimit=target_bwlimit if target_bwlimit else None,
-            skip_parent=skip_parent,
-            create_bookmark=create_bookmark,
-            force_delete=force_delete,
-            send_options="L" if large_blocks else None,
-            source_host=source_host,
-            target_host=target_host,
-            ssh_port=ssh_profile['port'] if ssh_profile and ssh_profile['port'] != 22 else None,
-            ssh_key=ssh_profile['identity_file'] if ssh_profile else None,
-            ssh_options=ssh_profile['ssh_options'] if ssh_profile else None
-        )
-        
-        return templates.TemplateResponse(
-            request,
-            name="zfs/replication/syncoid_result.jinja",
-            context={
-                "result": result,
-                "page_title": "Syncoid Result"
-            }
-        )
-    except Exception as e:
-        syncoid_status = syncoid_service.check_syncoid_status()
-        datasets = dataset_service.list_datasets()
-        return templates.TemplateResponse(
-            request,
-            name="zfs/replication/syncoid.jinja",
-            context={
-                "syncoid_status": syncoid_status,
-                "datasets": datasets,
-                "error": str(e),
-                "page_title": "Syncoid Replication"
-            }
-        )
-
-
-@router.post("/syncoid/test-connection", response_class=HTMLResponse)
-async def syncoid_test_connection(
-    request: Request,
-    remote_host: Annotated[str, Form()],
-    remote_port: Annotated[int, Form()] = 22,
-    dataset: Annotated[str, Form()] = ""
-):
-    """Test SSH connection to remote host"""
-    try:
-        result = syncoid_service.test_connection(
-            remote_host=remote_host,
-            remote_port=remote_port,
-            dataset=dataset if dataset else None
-        )
-        
-        if result['status'] == 'success':
-            message = f"Connection to {remote_host} successful"
-        else:
-            message = f"Connection failed: {result['message']}"
-        
-        return RedirectResponse(
-            url=f"/zfs/replication/syncoid?message={message}",
-            status_code=303
-        )
-    except Exception as e:
-        return RedirectResponse(
-            url=f"/zfs/replication/syncoid?error={str(e)}",
-            status_code=303
-        )
-
-
-@router.post("/syncoid/common-snapshots", response_class=HTMLResponse)
-async def syncoid_common_snapshots(
-    request: Request,
-    source: Annotated[str, Form()],
-    target: Annotated[str, Form()],
-    source_host: Annotated[str, Form()] = "",
-    target_host: Annotated[str, Form()] = ""
-):
-    """Get common snapshots between source and target"""
-    try:
-        result = syncoid_service.get_common_snapshots(
-            source=source,
-            target=target,
-            source_host=source_host if source_host else None,
-            target_host=target_host if target_host else None
-        )
-        
-        return templates.TemplateResponse(
-            request,
-            name="zfs/replication/common_snapshots.jinja",
-            context={
-                "result": result,
-                "source": source,
-                "target": target,
-                "page_title": "Common Snapshots"
-            }
-        )
-    except Exception as e:
-        return templates.TemplateResponse(
-            request,
-            name="partials/error.jinja",
-            context={
-                "error": str(e),
-                "back_url": "/zfs/replication/syncoid"
             }
         )
 
@@ -563,85 +398,6 @@ async def get_ssh_connections():
             "success": True,
             "connections": connections
         })
-    except Exception as e:
-        return JSONResponse({
-            "success": False,
-            "error": str(e)
-        })
-
-
-@router.post("/api/get-remote-datasets")
-async def get_remote_datasets(data: Dict = Body(...)):
-    """API endpoint to get datasets from a remote system via SSH connection"""
-    try:
-        import subprocess
-        
-        ssh_connection_id = data.get('ssh_connection_id')
-        
-        if not ssh_connection_id:
-            # Return local datasets
-            local_datasets = dataset_service.list_datasets()
-            return JSONResponse({
-                "success": True,
-                "datasets": [ds['name'] for ds in local_datasets],
-                "message": "Local datasets loaded",
-                "is_local": True
-            })
-        
-        # Get the SSH connection
-        connection = ssh_service.get_connection(ssh_connection_id)
-        if not connection:
-            return JSONResponse({
-                "success": False,
-                "error": "SSH connection not found"
-            })
-        
-        # Get list of datasets from remote using key-based authentication
-        try:
-            ssh_service.ensure_host_key_trusted(connection['host'], connection['port'])
-            ssh_cmd = [
-                'ssh',
-                '-i', connection['private_key_path'],
-                '-p', str(connection['port']),
-                '-o', 'BatchMode=yes',
-                '-o', 'ConnectTimeout=10',
-            ]
-            for ssh_option in ssh_service.get_host_key_options():
-                ssh_cmd.extend(['-o', ssh_option])
-            ssh_cmd.extend([
-                f"{connection['username']}@{connection['host']}",
-                'zfs', 'list', '-H', '-o', 'name'
-            ])
-            
-            process = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=30)
-            
-            if process.returncode == 0:
-                datasets = [line.strip() for line in process.stdout.strip().split('\n') if line.strip()]
-                
-                return JSONResponse({
-                    "success": True,
-                    "datasets": datasets,
-                    "message": f"Loaded {len(datasets)} datasets from {connection['name']}",
-                    "is_local": False,
-                    "connection_name": connection['name']
-                })
-            else:
-                error_msg = process.stderr if process.stderr else "Connection failed"
-                return JSONResponse({
-                    "success": False,
-                    "error": f"Failed to get datasets: {error_msg}"
-                })
-        except subprocess.TimeoutExpired:
-            return JSONResponse({
-                "success": False,
-                "error": "Connection timeout (30 seconds)"
-            })
-        except Exception as e:
-            return JSONResponse({
-                "success": False,
-                "error": f"Failed to fetch datasets: {str(e)}"
-            })
-            
     except Exception as e:
         return JSONResponse({
             "success": False,
