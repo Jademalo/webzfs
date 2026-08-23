@@ -63,6 +63,80 @@ if ! id "$WEBZFS_USER" &>/dev/null; then
     exit 1
 fi
 
+# Function to check if command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Node.js/npm preflight (GitHub issue #209).
+# The update rebuilds CSS with npm install and npm run build:css as the
+# webzfs service account. Verify a usable non-Snap Node.js 20+ toolchain
+# exists before stopping the service or touching any files.
+echo "Checking Node.js/npm prerequisites..."
+
+if ! command_exists node; then
+    echo -e "${RED}Error: Node.js is not installed${NC}"
+    echo "Please install Node.js v20+ and try again"
+    exit 1
+fi
+
+if ! command_exists npm; then
+    echo -e "${RED}Error: npm is not installed${NC}"
+    echo "Please install npm and try again"
+    exit 1
+fi
+
+# Reject Snap-packaged Node.js/npm. The build steps run as the webzfs
+# service account with HOME=/opt/webzfs. Snapd refuses to run snaps for
+# users whose home directory is outside /home, which makes the Node Snap
+# unusable for the WebZFS build. A system Node.js/npm must be installed
+# instead. The existing Snap does not need to be removed.
+NODE_REAL_PATH=$(readlink -f "$(command -v node)" 2>/dev/null || true)
+NPM_REAL_PATH=$(readlink -f "$(command -v npm)" 2>/dev/null || true)
+
+case "$NODE_REAL_PATH:$NPM_REAL_PATH" in
+    /snap/*|*:/snap/*)
+        echo -e "${RED}Error: Node.js/npm are installed as a Snap package${NC}"
+        echo
+        echo "The Node Snap cannot be used by the WebZFS updater because the"
+        echo "build runs as the 'webzfs' service account with HOME=/opt/webzfs,"
+        echo "and snapd rejects home directories outside of /home."
+        echo
+        echo "Please install a system (non-Snap) Node.js 20+ and npm, then"
+        echo "rerun this updater. For example, on Debian/Ubuntu:"
+        echo
+        echo "  sudo apt update"
+        echo "  sudo apt install nodejs npm"
+        echo
+        echo "The existing Node Snap does not need to be removed; the system"
+        echo "packages can coexist with it. If both are installed, ensure the"
+        echo "non-Snap node/npm come first in PATH."
+        exit 1
+        ;;
+esac
+
+# Enforce the Node.js 20+ requirement
+NODE_VERSION=$(node --version 2>/dev/null | sed 's/^v//')
+NODE_MAJOR=$(echo "$NODE_VERSION" | cut -d. -f1)
+
+case "$NODE_MAJOR" in
+    ''|*[!0-9]*)
+        echo -e "${RED}Error: Unable to determine the Node.js version${NC}"
+        echo "Please install Node.js v20 or newer and try again"
+        exit 1
+        ;;
+esac
+
+if [ "$NODE_MAJOR" -lt 20 ]; then
+    echo -e "${RED}Error: Node.js 20+ is required (found ${NODE_VERSION})${NC}"
+    echo "Please install Node.js v20 or newer and try again"
+    exit 1
+fi
+
+echo -e "${GREEN}✓${NC} Node.js $(node --version) found"
+echo -e "${GREEN}✓${NC} npm $(npm --version) found"
+
+
 # Check if service is running
 SERVICE_WAS_RUNNING=false
 if systemctl is-active --quiet webzfs 2>/dev/null; then
