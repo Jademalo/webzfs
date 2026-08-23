@@ -96,15 +96,23 @@
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
                             <label class="form-label" for="source_dataset">Source Dataset <span class="text-danger-400">*</span></label>
-                            <input type="text" name="source_dataset" id="source_dataset" required class="form-input"
-                                   value="{{ job.source_dataset if job else '' }}" placeholder="pool/dataset">
-                            <p class="text-text-tertiary text-xs mt-1" id="source-hint">Dataset name only; the SSH connection provides the remote host for pull jobs</p>
+                            <select name="source_dataset" id="source_dataset" required class="form-select"
+                                    data-current="{{ job.source_dataset if job else '' }}">
+                                <option value="">-- Select source dataset --</option>
+                            </select>
+                            <p class="text-text-tertiary text-xs mt-1" id="source-hint">Local datasets are listed automatically; for pull jobs, select an SSH connection to load the remote datasets</p>
                         </div>
                         <div>
-                            <label class="form-label" for="target_dataset">Target Dataset <span class="text-danger-400">*</span></label>
-                            <input type="text" name="target_dataset" id="target_dataset" required class="form-input"
-                                   value="{{ job.target_dataset if job else '' }}" placeholder="pool/backup/dataset">
-                            <p class="text-text-tertiary text-xs mt-1" id="target-hint">Dataset name only; the SSH connection provides the remote host for push jobs</p>
+                            <label class="form-label" for="target_dataset">Target Parent Dataset <span class="text-danger-400">*</span></label>
+                            <select name="target_dataset" id="target_dataset" required class="form-select"
+                                    data-current="{{ job.target_dataset if job else '' }}">
+                                <option value="">-- Select target parent dataset --</option>
+                            </select>
+                            <p class="text-text-tertiary text-xs mt-1" id="target-hint">Syncoid replicates into the exact dataset named here, so a child name is appended to the selected parent (it is created on first replication). Selecting a parent alone would replicate on top of it and fail.</p>
+                            <label class="form-label mt-2" for="target_new_child">Child Dataset Name <span class="text-danger-400">*</span></label>
+                            <input type="text" name="target_new_child" id="target_new_child" class="form-input"
+                                   placeholder="e.g. acestep (auto-filled from source)">
+                            <p class="text-text-tertiary text-xs mt-1">Full target: <code id="target-full-preview" class="text-info-400">-- select parent and child --</code></p>
                         </div>
                     </div>
                 </div>
@@ -200,9 +208,31 @@
                     </p>
                 </div>
 
+                <!-- Command Preview -->
+                <div class="mb-6 pt-4 border-t border-border-subtle">
+                    <label class="form-label flex items-center">
+                        <svg class="w-4 h-4 mr-2 text-info-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                        </svg>
+                        Command Preview
+                    </label>
+                    <div id="command-preview" class="bg-bg-elevated-2 rounded-lg p-4 font-mono text-sm text-info-400 border border-border-default overflow-x-auto whitespace-pre-wrap">
+                        <span class="text-text-tertiary">Select a source dataset and target to preview the command.</span>
+                    </div>
+                    <p class="text-text-tertiary text-xs mt-1">This is the syncoid command the scheduler will run. SSH key and host options are added automatically from the selected connection at each run.</p>
+                </div>
+
+                <!-- Confirmation Checkbox -->
+                <div class="mb-6">
+                    <label class="flex items-center">
+                        <input type="checkbox" id="confirm-command" class="form-checkbox">
+                        <span class="ml-3 text-text-secondary font-medium">I have reviewed the replication command above and want to proceed</span>
+                    </label>
+                </div>
+
                 <!-- Actions -->
                 <div class="flex items-center justify-between pt-4 border-t border-border-subtle">
-                    <button type="submit" class="btn-primary">
+                    <button type="submit" id="save-btn" disabled class="btn-primary opacity-50 cursor-not-allowed">
                         <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
                         </svg>
@@ -242,12 +272,166 @@
     const nextRunsBox = document.getElementById('next-runs');
     let validateTimer = null;
 
+    // Dataset dropdown population. Local datasets are rendered by the
+    // server; remote datasets are fetched through the selected SSH
+    // Manager connection, mirroring the Send/Receive form behavior.
+    const localDatasets = {{ (local_datasets or []) | tojson }};
+    const sourceSelect = document.getElementById('source_dataset');
+    const targetSelect = document.getElementById('target_dataset');
+    const targetNewChild = document.getElementById('target_new_child');
+    let remoteDatasets = null;
+    let remoteLoadedForConnection = null;
+
+    function fillSelect(select, names, placeholder) {
+        const saved = select.dataset.current || '';
+        const previous = select.value || saved;
+        select.innerHTML = '';
+        const blank = document.createElement('option');
+        blank.value = '';
+        blank.textContent = placeholder;
+        select.appendChild(blank);
+        let matched = false;
+        names.forEach(function(name) {
+            const option = document.createElement('option');
+            option.value = name;
+            option.textContent = name;
+            if (name === previous) { option.selected = true; matched = true; }
+            select.appendChild(option);
+        });
+        // Keep a saved value visible even if it is not in the list
+        // (e.g. remote list not loaded yet, or dataset renamed).
+        if (previous && !matched) {
+            const keep = document.createElement('option');
+            keep.value = previous;
+            keep.textContent = previous + ' (saved value)';
+            keep.selected = true;
+            select.appendChild(keep);
+        }
+    }
+
+    async function loadRemoteDatasets() {
+        const connectionId = sshConnectionSelect.value;
+        if (!connectionId) {
+            remoteDatasets = null;
+            remoteLoadedForConnection = null;
+            return [];
+        }
+        if (remoteDatasets && remoteLoadedForConnection === connectionId) {
+            return remoteDatasets;
+        }
+        try {
+            const response = await fetch('/zfs/replication/api/test-remote-connection', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ssh_connection_id: connectionId })
+            });
+            const data = await response.json();
+            if (data.success) {
+                remoteDatasets = data.datasets;
+                remoteLoadedForConnection = connectionId;
+                return remoteDatasets;
+            }
+        } catch (err) {
+            // Fall through to empty list; saved value stays selectable
+        }
+        remoteDatasets = null;
+        remoteLoadedForConnection = null;
+        return [];
+    }
+
+    // On the edit form the saved target is the full dataset name
+    // (parent/child). Split it against the available parent list so
+    // the parent lands in the dropdown and the remainder in the child
+    // field. The longest matching parent wins.
+    function splitSavedTarget(names) {
+        const saved = targetSelect.value;
+        if (!saved || targetNewChild.value) { return; }
+        if (names.indexOf(saved) !== -1) { return; }
+        let bestParent = '';
+        names.forEach(function(name) {
+            if (saved.indexOf(name + '/') === 0 && name.length > bestParent.length) {
+                bestParent = name;
+            }
+        });
+        if (bestParent) {
+            targetNewChild.value = saved.slice(bestParent.length + 1);
+            // Re-select the parent; drop the "(saved value)" keep option
+            for (let i = targetSelect.options.length - 1; i >= 0; i--) {
+                if (targetSelect.options[i].value === saved) {
+                    targetSelect.remove(i);
+                }
+            }
+            targetSelect.value = bestParent;
+        }
+    }
+
+    function updateTargetPreview() {
+        const preview = document.getElementById('target-full-preview');
+        const base = targetSelect.value;
+        const child = (targetNewChild.value || '').trim().replace(/^\/+|\/+$/g, '');
+        if (base && child) {
+            preview.textContent = base + '/' + child;
+        } else if (base) {
+            preview.textContent = base + ' (no child; replicates directly into this dataset)';
+        } else {
+            preview.textContent = '-- select parent and child --';
+        }
+    }
+
+    // Auto-fill the child name from the source dataset's last path
+    // component (zstor/ai/acestep pushed to zdata targets
+    // zdata/acestep). Manual edits to the child field are respected.
+    let childAutoFilled = !targetNewChild.value;
+    function autoFillChildFromSource() {
+        if (!childAutoFilled) { return; }
+        const source = sourceSelect.value;
+        if (!source) { return; }
+        const parts = source.split('/');
+        targetNewChild.value = parts[parts.length - 1];
+        updateTargetPreview();
+    }
+    targetNewChild.addEventListener('input', function() {
+        childAutoFilled = false;
+        updateTargetPreview();
+    });
+    targetSelect.addEventListener('change', updateTargetPreview);
+
+    async function refreshDatasetDropdowns() {
+        const direction = typeSelect.value;
+        if (direction === 'pull') {
+            fillSelect(targetSelect, localDatasets, '-- Select target parent dataset --');
+            splitSavedTarget(localDatasets);
+            const remote = await loadRemoteDatasets();
+            fillSelect(sourceSelect, remote,
+                remote.length ? '-- Select source dataset --' : '-- Select SSH connection to load remote datasets --');
+        } else if (direction === 'push') {
+            fillSelect(sourceSelect, localDatasets, '-- Select source dataset --');
+            const remote = await loadRemoteDatasets();
+            fillSelect(targetSelect, remote,
+                remote.length ? '-- Select target parent dataset --' : '-- Select SSH connection to load remote datasets --');
+            splitSavedTarget(remote);
+        } else {
+            fillSelect(sourceSelect, localDatasets, '-- Select source dataset --');
+            fillSelect(targetSelect, localDatasets, '-- Select target parent dataset --');
+            splitSavedTarget(localDatasets);
+        }
+        autoFillChildFromSource();
+        updateTargetPreview();
+    }
+
+    // The parent and child are combined server-side in
+    // syncoid_job_save(); the child field is submitted as
+    // target_new_child. No client-side combining happens here.
+
     function updateConnectionVisibility() {
         const needsConnection = typeSelect.value === 'push' || typeSelect.value === 'pull';
         connectionField.classList.toggle('hidden', !needsConnection);
     }
 
-    typeSelect.addEventListener('change', updateConnectionVisibility);
+    typeSelect.addEventListener('change', function() {
+        updateConnectionVisibility();
+        refreshDatasetDropdowns();
+    });
     updateConnectionVisibility();
 
     presetSelect.addEventListener('change', function() {
@@ -331,12 +515,124 @@
         }
     }
 
-    sourceDatasetInput.addEventListener('input', function() {
+    sourceDatasetInput.addEventListener('change', function() {
+        autoFillChildFromSource();
         clearTimeout(largeBlocksTimer);
-        largeBlocksTimer = setTimeout(checkLargeBlocks, 600);
+        largeBlocksTimer = setTimeout(checkLargeBlocks, 200);
     });
-    sshConnectionSelect.addEventListener('change', checkLargeBlocks);
+    sshConnectionSelect.addEventListener('change', function() {
+        remoteDatasets = null;
+        remoteLoadedForConnection = null;
+        refreshDatasetDropdowns().then(function() {
+            checkLargeBlocks();
+            updateCommandPreview();
+        });
+    });
     typeSelect.addEventListener('change', checkLargeBlocks);
+
+    // Command preview and confirmation. Mirrors the syncoid command
+    // built by SyncoidService.execute_replication() from the runner's
+    // job options; SSH key and -o options are resolved at run time
+    // from the SSH Manager connection and noted in the preview.
+    const commandPreview = document.getElementById('command-preview');
+    const confirmCheckbox = document.getElementById('confirm-command');
+    const saveBtn = document.getElementById('save-btn');
+    const compressSelect = document.getElementById('compress');
+    const sourceBwInput = document.getElementById('source_bwlimit');
+    const targetBwInput = document.getElementById('target_bwlimit');
+
+    function optionCheckbox(name) {
+        return document.querySelector('input[name="' + name + '"]');
+    }
+
+    function fullTargetName() {
+        const base = targetSelect.value;
+        const child = (targetNewChild.value || '').trim().replace(/^\/+|\/+$/g, '');
+        if (base && child) { return base + '/' + child; }
+        return base;
+    }
+
+    function resetConfirmation() {
+        confirmCheckbox.checked = false;
+        saveBtn.disabled = true;
+        saveBtn.classList.add('opacity-50', 'cursor-not-allowed');
+    }
+
+    function updateCommandPreview() {
+        const source = sourceSelect.value;
+        const target = fullTargetName();
+        const direction = typeSelect.value;
+
+        if (!source || !target) {
+            commandPreview.innerHTML = '<span class="text-text-tertiary">Select a source dataset and target to preview the command.</span>';
+            resetConfirmation();
+            return;
+        }
+
+        const parts = ['syncoid'];
+        if (optionCheckbox('recursive').checked) { parts.push('-r'); }
+        if (optionCheckbox('no_sync_snap').checked) { parts.push('--no-sync-snap'); }
+        if (compressSelect.value) { parts.push('--compress ' + compressSelect.value); }
+        if (sourceBwInput.value.trim()) { parts.push('--source-bwlimit ' + sourceBwInput.value.trim()); }
+        if (targetBwInput.value.trim()) { parts.push('--target-bwlimit ' + targetBwInput.value.trim()); }
+        if (optionCheckbox('skip_parent').checked) { parts.push('--skip-parent'); }
+        if (optionCheckbox('create_bookmark').checked) { parts.push('--create-bookmark'); }
+        if (optionCheckbox('force_delete').checked) { parts.push('--force-delete'); }
+        if (largeBlocksCheckbox.checked) { parts.push('--sendoptions=L'); }
+
+        let hostPrefix = '<user>@<host>:';
+        const selectedConn = sshConnectionSelect.options[sshConnectionSelect.selectedIndex];
+        if (sshConnectionSelect.value && selectedConn) {
+            const match = selectedConn.textContent.match(/\(([^)]+)\)/);
+            if (match) { hostPrefix = match[1].split(':')[0] + ':'; }
+        }
+
+        let sourceStr = source;
+        let targetStr = target;
+        let sshNote = '';
+        if (direction === 'push') {
+            targetStr = hostPrefix + target;
+            sshNote = '\n# --sshkey and --sshoption flags are added from the SSH connection at run time';
+        } else if (direction === 'pull') {
+            sourceStr = hostPrefix + source;
+            sshNote = '\n# --sshkey and --sshoption flags are added from the SSH connection at run time';
+        }
+
+        parts.push(sourceStr);
+        parts.push(targetStr);
+        commandPreview.textContent = parts.join(' ') + sshNote;
+        resetConfirmation();
+    }
+
+    confirmCheckbox.addEventListener('change', function() {
+        if (this.checked && sourceSelect.value && fullTargetName()) {
+            saveBtn.disabled = false;
+            saveBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+        } else {
+            saveBtn.disabled = true;
+            saveBtn.classList.add('opacity-50', 'cursor-not-allowed');
+        }
+    });
+
+    // Refresh the preview when anything that affects the command changes
+    sourceSelect.addEventListener('change', updateCommandPreview);
+    targetSelect.addEventListener('change', updateCommandPreview);
+    targetNewChild.addEventListener('input', updateCommandPreview);
+    typeSelect.addEventListener('change', updateCommandPreview);
+    compressSelect.addEventListener('change', updateCommandPreview);
+    sourceBwInput.addEventListener('input', updateCommandPreview);
+    targetBwInput.addEventListener('input', updateCommandPreview);
+    ['recursive', 'no_sync_snap', 'skip_parent', 'create_bookmark',
+     'force_delete', 'large_blocks'].forEach(function(name) {
+        const box = optionCheckbox(name);
+        if (box) { box.addEventListener('change', updateCommandPreview); }
+    });
+
+    // Initial population (also restores saved values on the edit form)
+    refreshDatasetDropdowns().then(function() {
+        checkLargeBlocks();
+        updateCommandPreview();
+    });
 })();
 </script>
 {% endblock %}

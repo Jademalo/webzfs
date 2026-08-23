@@ -383,6 +383,26 @@
                             <p class="text-text-secondary"><span class="font-medium text-text-primary">Path:</span> <code class="text-info-400">{{ syncoid_status.path }}</code></p>
                             <p class="text-text-secondary"><span class="font-medium text-text-primary">Version:</span> <code class="text-info-400">{{ syncoid_status.version }}</code></p>
                         </div>
+                        {% if syncoid_status.missing_helpers %}
+                        <div class="bg-danger-900/30 border border-danger-700 rounded p-3">
+                            <div class="flex items-center mb-1">
+                                <svg class="w-4 h-4 text-danger-400 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                                </svg>
+                                <span class="text-danger-400 font-medium text-sm">Missing helper tools: {{ syncoid_status.missing_helpers | join(', ') }}</span>
+                            </div>
+                            <p class="text-xs text-text-secondary">Syncoid requires pv, lzop, and mbuffer to build its transfer pipeline. Replication may fail or run without progress reporting until they are installed.</p>
+                            <div class="bg-bg-elevated-3 p-2 rounded border border-border-default mt-2">
+                                {% if system == 'FreeBSD' %}
+                                <code class="text-xs text-info-400">pkg install {{ syncoid_status.missing_helpers | join(' ') }}</code>
+                                {% elif system == 'NetBSD' %}
+                                <code class="text-xs text-info-400">pkgin install {{ syncoid_status.missing_helpers | join(' ') }}</code>
+                                {% else %}
+                                <code class="text-xs text-info-400">apt install {{ syncoid_status.missing_helpers | join(' ') }} (or your distribution's package manager)</code>
+                                {% endif %}
+                            </div>
+                        </div>
+                        {% endif %}
                         <a href="/zfs/replication/syncoid" class="btn-info mt-3 inline-flex">
                             <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>

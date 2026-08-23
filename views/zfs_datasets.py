@@ -608,6 +608,33 @@ async def set_dataset_quota(
             )
 
 
+@router.get("/{dataset_path:path}/peek", response_class=HTMLResponse)
+async def peek_dataset_directory(
+    request: Request,
+    dataset_path: str,
+    subpath: Optional[str] = None
+):
+    """Return the peek modal partial listing a directory inside the dataset"""
+    try:
+        peek = dataset_service.peek_directory(dataset_path, subpath or "")
+    except Exception as e:
+        peek = {
+            'dataset': dataset_path,
+            'mountpoint': None,
+            'subpath': '',
+            'breadcrumbs': [],
+            'entries': [],
+            'truncated': False,
+            'error': str(e),
+        }
+    
+    return templates.TemplateResponse(
+        request,
+        name="zfs/datasets/peek_modal.jinja",
+        context={"peek": peek}
+    )
+
+
 # Catch-all route - MUST BE LAST to not interfere with more specific routes above
 @router.get("/{dataset_path:path}", response_class=HTMLResponse)
 async def dataset_detail(

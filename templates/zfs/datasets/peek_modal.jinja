@@ -1,0 +1,172 @@
+{#
+  Dataset Peek modal
+
+  Read-only quasi file manager view of a directory inside a mounted dataset.
+  Loaded via HTMX into #peek-modal-container on the dataset detail page.
+  Folder entries navigate deeper via hx-get. Traversal is restricted to the
+  dataset mountpoint by the backend.
+
+  Context:
+  - peek: dict with dataset, mountpoint, subpath, breadcrumbs, entries,
+    truncated, error
+#}
+
+<div
+  id="peek-modal"
+  class="modal-overlay"
+  x-data="{ open: true }"
+  x-show="open"
+  x-on:keydown.escape.window="open = false; document.getElementById('peek-modal-container').innerHTML = ''"
+>
+  {# Backdrop #}
+  <div class="fixed inset-0 bg-black/80 backdrop-blur-sm"
+       x-on:click="open = false; document.getElementById('peek-modal-container').innerHTML = ''"></div>
+
+  {# Dialog Container #}
+  <div class="fixed inset-0 z-50 overflow-y-auto">
+    <div class="flex min-h-full items-center justify-center p-4">
+      {# Dialog Content #}
+      <div class="modal modal-lg w-full max-w-3xl" x-on:click.stop>
+
+        {# Header #}
+        <div class="flex items-center justify-between mb-3 pb-3 border-b border-border-subtle">
+          <div class="flex items-center gap-2 min-w-0">
+            <svg class="w-5 h-5 text-primary-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+            </svg>
+            <h3 class="text-lg font-semibold text-text-primary truncate">
+              Peek: <span class="font-mono text-base">{{ peek.dataset }}</span>
+            </h3>
+          </div>
+          <button
+            type="button"
+            class="text-text-secondary hover:text-text-primary focus:outline-none rounded-lg p-1.5 transition-colors flex-shrink-0"
+            x-on:click="open = false; document.getElementById('peek-modal-container').innerHTML = ''"
+            aria-label="Close"
+          >
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+
+        {# Breadcrumb bar (traversal is limited to the dataset root) #}
+        <div class="flex items-center gap-1 flex-wrap text-sm mb-3 font-mono">
+          <button
+            type="button"
+            class="text-primary-400 hover:text-primary-300 transition-colors {% if not peek.subpath %}font-semibold{% endif %}"
+            hx-get="/zfs/datasets/{{ peek.dataset }}/peek"
+            hx-target="#peek-modal-container"
+            hx-swap="innerHTML"
+          >{{ peek.dataset }}</button>
+          {% for crumb in peek.breadcrumbs %}
+            <span class="text-text-tertiary">/</span>
+            {% if loop.last %}
+              <span class="text-text-primary font-semibold">{{ crumb.name }}</span>
+            {% else %}
+              <button
+                type="button"
+                class="text-primary-400 hover:text-primary-300 transition-colors"
+                hx-get="/zfs/datasets/{{ peek.dataset }}/peek?subpath={{ crumb.subpath | urlencode }}"
+                hx-target="#peek-modal-container"
+                hx-swap="innerHTML"
+              >{{ crumb.name }}</button>
+            {% endif %}
+          {% endfor %}
+          {% if peek.breadcrumbs %}
+            {# Up one level control #}
+            <button
+              type="button"
+              class="ml-2 text-text-secondary hover:text-text-primary transition-colors inline-flex items-center gap-1"
+              title="Up one level"
+              {% if peek.breadcrumbs | length > 1 %}
+              hx-get="/zfs/datasets/{{ peek.dataset }}/peek?subpath={{ peek.breadcrumbs[-2].subpath | urlencode }}"
+              {% else %}
+              hx-get="/zfs/datasets/{{ peek.dataset }}/peek"
+              {% endif %}
+              hx-target="#peek-modal-container"
+              hx-swap="innerHTML"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 11l5-5m0 0l5 5m-5-5v12"/>
+              </svg>
+            </button>
+          {% endif %}
+        </div>
+
+        {# Body #}
+        {% if peek.error %}
+        <div class="alert-danger" role="alert">
+          <div class="flex items-start gap-3">
+            <svg class="w-5 h-5 mt-0.5 text-danger-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+              <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
+            </svg>
+            <div class="text-sm text-danger-300">{{ peek.error }}</div>
+          </div>
+        </div>
+        {% elif peek.entries | length == 0 %}
+        <div class="text-text-tertiary text-sm text-center py-8">
+          This directory is empty
+        </div>
+        {% else %}
+        <div class="overflow-y-auto max-h-[60vh] pr-1">
+          <div class="grid grid-cols-2 sm:grid-cols-3 gap-1">
+            {% for entry in peek.entries %}
+              {% if entry.is_dir %}
+              <button
+                type="button"
+                class="flex items-center gap-2 px-2 py-1.5 rounded-lg text-left hover:bg-surface-hover transition-colors min-w-0 {% if entry.is_hidden %}opacity-60{% endif %}"
+                {% if peek.subpath %}
+                hx-get="/zfs/datasets/{{ peek.dataset }}/peek?subpath={{ (peek.subpath ~ '/' ~ entry.name) | urlencode }}"
+                {% else %}
+                hx-get="/zfs/datasets/{{ peek.dataset }}/peek?subpath={{ entry.name | urlencode }}"
+                {% endif %}
+                hx-target="#peek-modal-container"
+                hx-swap="innerHTML"
+                title="{{ entry.name }}"
+              >
+                <svg class="w-5 h-5 text-primary-400 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M10 4H4c-1.11 0-2 .89-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2z"/>
+                </svg>
+                <span class="text-sm text-text-primary truncate">{{ entry.name }}</span>
+              </button>
+              {% else %}
+              <div
+                class="flex items-center gap-2 px-2 py-1.5 rounded-lg min-w-0 {% if entry.is_hidden %}opacity-60{% endif %}"
+                title="{{ entry.name }}{% if entry.size is not none %} ({{ entry.size }} bytes){% endif %}"
+              >
+                <svg class="w-5 h-5 text-text-tertiary flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+                </svg>
+                <span class="text-sm text-text-secondary truncate">{{ entry.name }}</span>
+              </div>
+              {% endif %}
+            {% endfor %}
+          </div>
+        </div>
+        {% if peek.truncated %}
+        <div class="text-xs text-warning-400 mt-2">
+          Showing the first {{ peek.entries | length }} entries. This directory contains more items.
+        </div>
+        {% endif %}
+        {% endif %}
+
+        {# Footer #}
+        <div class="flex items-center justify-between mt-4 pt-3 border-t border-border-subtle">
+          <span class="text-xs text-text-tertiary font-mono truncate">
+            {% if peek.mountpoint %}{{ peek.mountpoint }}{% if peek.subpath %}/{{ peek.subpath }}{% endif %}{% endif %}
+          </span>
+          <button
+            type="button"
+            class="btn-secondary text-sm"
+            x-on:click="open = false; document.getElementById('peek-modal-container').innerHTML = ''"
+          >
+            Close
+          </button>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>

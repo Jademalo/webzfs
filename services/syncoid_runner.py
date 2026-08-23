@@ -154,8 +154,40 @@ def _execute_locked_job(
             "execution_id": execution_id,
         }
 
+    # Validate dataset names before invoking syncoid. Jobs saved before
+    # form validation existed may hold a mountpoint path (for example
+    # /zdata) instead of a ZFS dataset name. Syncoid would fail deep in
+    # the pipe with "cannot receive: invalid name" hidden behind mbuffer
+    # broken pipe errors; fail fast with a clear message instead.
+    dataset_error = _validate_job_datasets(job)
+    if dataset_error:
+        finish("failure", error_message=dataset_error)
+        return {
+            "success": False,
+            "status": "failure",
+            "error": dataset_error,
+            "execution_id": execution_id,
+        }
+
     source_host = ssh_profile["host_string"] if ssh_profile and replication_type == "pull" else None
     target_host = ssh_profile["host_string"] if ssh_profile and replication_type == "push" else None
+
+    def record_progress(progress: Dict[str, Any]) -> None:
+        """Persist a pv progress frame so the execution detail page's
+        Real-Time Progress panel (which polls the progress store) has
+        live data during scheduled and manual syncoid runs."""
+        try:
+            storage.add_progress_update(
+                execution_id=execution_id,
+                bytes_transferred=progress.get("bytes_transferred", 0),
+                percentage_complete=progress.get("percentage", 0.0),
+                transfer_rate=progress.get("transfer_rate", "N/A"),
+                estimated_time_remaining=progress.get("eta"),
+                status_message="Syncoid transfer in progress",
+            )
+        except Exception:
+            # Progress recording must never break the replication.
+            pass
 
     try:
         syncoid_service = SyncoidService()
@@ -180,6 +212,7 @@ def _execute_locked_job(
             ),
             ssh_key=ssh_profile["identity_file"] if ssh_profile else None,
             ssh_options=ssh_profile["ssh_options"] if ssh_profile else None,
+            progress_callback=record_progress,
         )
     except Exception as run_error:
         finish("failure", error_message=str(run_error))
@@ -213,6 +246,37 @@ def _execute_locked_job(
         "error": error_message,
         "execution_id": execution_id,
     }
+
+
+def _validate_job_datasets(job: Dict[str, Any]) -> Optional[str]:
+    """Validate the job's source and target dataset names.
+
+    Returns an error message when a name is invalid, or None when both
+    are valid. A leading slash is called out specifically because it
+    means the user entered a mountpoint path instead of a ZFS dataset
+    name, the most common cause of "cannot receive: invalid name".
+    """
+    from services.zfs_dataset import ZFSDatasetService
+
+    checks = [
+        ("Source dataset", (job.get("source_dataset") or "").strip()),
+        ("Target dataset", (job.get("target_dataset") or "").strip()),
+    ]
+    for field_label, dataset_name in checks:
+        if not dataset_name:
+            return f"{field_label} is empty. Edit the job and set a ZFS dataset name."
+        if dataset_name.startswith("/"):
+            return (
+                f"{field_label} '{dataset_name}' is a mountpoint path, not a "
+                "ZFS dataset name. Edit the job and use the dataset name "
+                "without a leading slash (for example 'zdata' or "
+                "'zdata/backups')."
+            )
+        try:
+            ZFSDatasetService.validate_dataset_name(dataset_name)
+        except ValueError as validation_error:
+            return f"{field_label}: {validation_error}"
+    return None
 
 
 def _combine_output(result: Dict[str, Any], max_chars: int = 100000) -> str:

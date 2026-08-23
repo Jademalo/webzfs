@@ -74,7 +74,7 @@ The application automatically detects the operating system and adapts its behavi
 - smartmontools (smartctl)
 - sanoid (optional)
 - smartd (optional)
-- sudo (on linux
+- sudo (on linux)
 
 #### FreeBSD Package Requirements: (Automatically installed with the install script)
 #### ArchLinux Requirements:

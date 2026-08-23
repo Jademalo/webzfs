@@ -855,6 +855,41 @@ def _annotate_jobs(jobs):
     return jobs
 
 
+def _validate_job_dataset(dataset_name: str, field_label: str) -> Optional[str]:
+    """Validate a Syncoid job dataset name.
+
+    Returns an error message string when the name is invalid, or None
+    when it is valid. Gives a specific hint when the user entered a
+    mountpoint path (leading slash) instead of a ZFS dataset name,
+    which ZFS rejects at receive time with "cannot receive: invalid
+    name".
+    """
+    if not dataset_name:
+        return f"{field_label} cannot be empty."
+    if dataset_name.startswith('/'):
+        return (
+            f"{field_label} '{dataset_name}' looks like a mountpoint path. "
+            "Enter the ZFS dataset name instead, for example 'zdata' or "
+            "'zdata/backups', without a leading slash."
+        )
+    try:
+        ZFSDatasetService.validate_dataset_name(dataset_name)
+    except ValueError as validation_error:
+        return f"{field_label}: {validation_error}"
+    return None
+
+
+def _list_local_dataset_names():
+    """Return local dataset names for the job form dropdowns.
+
+    Failures are non-fatal; the form falls back to free-text entry.
+    """
+    try:
+        return [d.get('name') for d in dataset_service.list_datasets() if d.get('name')]
+    except Exception:
+        return []
+
+
 def _parse_job_form_error(request: Request, error: str, job=None):
     """Render the job form again with an error message."""
     return templates.TemplateResponse(
@@ -864,6 +899,7 @@ def _parse_job_form_error(request: Request, error: str, job=None):
             "job": job,
             "ssh_connections": ssh_service.list_connections(),
             "schedule_presets": get_schedule_presets(),
+            "local_datasets": _list_local_dataset_names(),
             "error": error,
             "page_title": "Scheduled Syncoid Job"
         }
@@ -880,6 +916,7 @@ async def syncoid_job_create_form(request: Request):
             "job": None,
             "ssh_connections": ssh_service.list_connections(),
             "schedule_presets": get_schedule_presets(),
+            "local_datasets": _list_local_dataset_names(),
             "page_title": "Create Scheduled Syncoid Job"
         }
     )
@@ -901,6 +938,7 @@ async def syncoid_job_edit_form(request: Request, job_id: int):
             "job": job,
             "ssh_connections": ssh_service.list_connections(),
             "schedule_presets": get_schedule_presets(),
+            "local_datasets": _list_local_dataset_names(),
             "page_title": f"Edit Scheduled Syncoid Job: {job['name']}"
         }
     )
@@ -913,6 +951,7 @@ async def syncoid_job_save(
     source_dataset: Annotated[str, Form()],
     target_dataset: Annotated[str, Form()],
     schedule: Annotated[str, Form()],
+    target_new_child: Annotated[str, Form()] = "",
     replication_type: Annotated[str, Form()] = "local",
     ssh_connection_id: Annotated[str, Form()] = "",
     job_id: Annotated[str, Form()] = "",
@@ -929,6 +968,18 @@ async def syncoid_job_save(
 ):
     """Create or update a scheduled Syncoid job and register it with
     the OS scheduler (systemd timer on Linux, root crontab on BSD)."""
+    source_dataset = source_dataset.strip()
+    target_dataset = target_dataset.strip()
+    # Combine the target parent with the child dataset name server-side.
+    # Syncoid replicates into the exact dataset named as target, so the
+    # child (created on first replication) must be part of the stored
+    # name. Client-side combining proved unreliable, so it happens here.
+    target_new_child = target_new_child.strip().strip("/")
+    if target_new_child:
+        if target_dataset:
+            target_dataset = f"{target_dataset}/{target_new_child}"
+        else:
+            target_dataset = target_new_child
     form_job = {
         "id": int(job_id) if job_id else None,
         "name": name,
@@ -954,6 +1005,16 @@ async def syncoid_job_save(
         is_valid, schedule_error = validate_cron_expression(schedule)
         if not is_valid:
             return _parse_job_form_error(request, schedule_error, form_job)
+
+        # Validate dataset names before saving. Without this check a
+        # mountpoint path such as /zdata is accepted, and the job later
+        # fails at run time with "cannot receive: invalid name" buried
+        # in mbuffer broken pipe noise (see replication error reports).
+        dataset_error = _validate_job_dataset(source_dataset, "Source dataset")
+        if not dataset_error:
+            dataset_error = _validate_job_dataset(target_dataset, "Target dataset")
+        if dataset_error:
+            return _parse_job_form_error(request, dataset_error, form_job)
 
         if replication_type in ("push", "pull") and not ssh_connection_id:
             return _parse_job_form_error(
