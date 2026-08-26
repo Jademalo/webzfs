@@ -200,6 +200,14 @@ if [ ! -f "${DATA_DIR}/health_schedules.json" ]; then
 fi
 
 chown -R "$WEBZFS_USER:$WEBZFS_USER" "$DATA_DIR"
+
+# Remove stale scheduled-task lock files created by older releases that
+# ran the task runner as root (issue #194). The /tmp sticky bit prevents
+# the webzfs account from deleting them itself, and a root-owned 0644
+# lock cannot be opened for append by webzfs. The runner recreates them
+# with webzfs ownership on the next run.
+rm -f /tmp/webzfs-task-*.lock
+
 echo -e "${GREEN}✓${NC} Data files verified"
 echo
 

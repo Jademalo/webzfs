@@ -55,7 +55,20 @@ class RunLock:
 
     def __enter__(self) -> bool:
         import fcntl
-        self.handle = open(self.path, "a")
+        try:
+            self.handle = open(self.path, "a")
+        except PermissionError:
+            # A lock file left behind by an older release that ran the
+            # scheduled runner as root (issue #194) cannot be opened by
+            # the webzfs account, and the /tmp sticky bit prevents
+            # deleting it. Surface a clear remediation instead of a
+            # traceback. update_linux.sh removes these stale files.
+            logger.error(
+                f"Cannot open lock file {self.path}: it is owned by "
+                f"another user (likely root, created by an older WebZFS "
+                f"release). Remove it as root with: rm {self.path}"
+            )
+            raise
         try:
             fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
@@ -307,7 +320,10 @@ def main(argv=None) -> int:
     handler = TASK_HANDLERS[args.task_type]
 
     lock = RunLock(args.task_type, args.task_id)
-    acquired = lock.__enter__()
+    try:
+        acquired = lock.__enter__()
+    except PermissionError:
+        return 1
     if not acquired:
         logger.warning(
             f"{args.task_type} task {args.task_id} is already running; "

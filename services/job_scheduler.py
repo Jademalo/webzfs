@@ -14,8 +14,11 @@ task domains behind one common unit/cron naming scheme:
 Platform behavior:
 - Linux: creates a systemd service/timer unit pair per task via
   sudo tee and enables it with sudo systemctl. The service runs the
-  generic runner CLI as root so ZFS and smartctl operations have the
-  privileges they need.
+  generic runner CLI as the same account the web application runs as
+  (webzfs), so state files it writes keep webzfs ownership. Privileged
+  child commands (zpool, syncoid, smartctl) still elevate through sudo
+  via the existing service-level privilege helpers, exactly as they do
+  when triggered from the web interface (issue #194).
 - FreeBSD/NetBSD: manages a single marker-delimited block in the root
   crontab containing one line per enabled task. WebZFS already runs as
   root on the BSDs and cron is the native scheduler there.
@@ -23,8 +26,11 @@ Platform behavior:
 Schedules are stored as 5-field cron expressions and converted to
 systemd OnCalendar syntax on Linux by services/schedule_utils.
 """
+import grp
 import logging
+import os
 import platform
+import pwd
 import re
 import subprocess
 import sys
@@ -71,6 +77,22 @@ def _is_linux() -> bool:
 def _python_executable() -> str:
     """Absolute path to the venv Python running this application."""
     return sys.executable
+
+
+def _service_user() -> str:
+    """Account name the generated systemd service should run as.
+
+    This is the account the web application itself runs as (webzfs on a
+    standard Linux install). Running the task runner as the same user
+    keeps JSON state, progress, log, and lock files owned by that user.
+    Privileged child commands still elevate through sudo (issue #194).
+    """
+    return pwd.getpwuid(os.getuid()).pw_name
+
+
+def _service_group() -> str:
+    """Primary group name for the generated systemd service."""
+    return grp.getgrgid(os.getgid()).gr_name
 
 
 def _app_directory() -> str:
@@ -308,7 +330,12 @@ class TaskScheduler:
             "\n"
             "[Service]\n"
             "Type=oneshot\n"
-            "User=root\n"
+            # Run as the web application account (webzfs), not root, so
+            # the runner's JSON/progress/lock writes keep webzfs
+            # ownership. Privileged commands (zpool, syncoid, smartctl)
+            # elevate through sudo inside the runner (issue #194).
+            f"User={_service_user()}\n"
+            f"Group={_service_group()}\n"
             f"WorkingDirectory={_app_directory()}\n"
             # HOME must point at the application directory so
             # FileStorageService and SSHConnectionService resolve
