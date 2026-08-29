@@ -1,0 +1,98 @@
+{% extends "layout.jinja" %}
+
+{% set active_page = 'utils' %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <!-- Breadcrumb Navigation -->
+    <nav class="text-sm mb-6 text-text-tertiary">
+        <a href="/utils" class="hover:text-primary-400">Utilities</a>
+        <span class="mx-2">/</span>
+        <span class="text-text-primary">Scheduling</span>
+    </nav>
+
+    <!-- Page Header -->
+    <div class="flex flex-wrap justify-between items-center gap-3 mb-6">
+        <div>
+            <h1 class="text-3xl font-bold text-text-primary">Scheduling</h1>
+            <p class="text-text-secondary text-sm mt-1">
+                Every WebZFS scheduled task in one place, backed by systemd timers on Linux and the root crontab on FreeBSD and NetBSD
+            </p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+            <!-- One button per task type. Each type has its own form page
+                 because a scrub, a SMART test, and a health report need
+                 different fields. -->
+            <a href="/utils/scheduling/scrub/new" class="btn-primary px-4 py-2 inline-flex items-center gap-2">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                </svg>
+                New Scrub
+            </a>
+            <a href="/utils/scheduling/smart/new" class="btn-secondary px-4 py-2 inline-flex items-center gap-2">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                </svg>
+                New SMART Test
+            </a>
+            <a href="/utils/scheduling/health/new" class="btn-secondary px-4 py-2 inline-flex items-center gap-2">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                </svg>
+                New Health Check
+            </a>
+            <a href="/zfs/replication/syncoid/jobs/create/form" class="btn-secondary px-4 py-2 inline-flex items-center gap-2">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                </svg>
+                New Replication Job
+            </a>
+            <form method="post" action="/utils/scheduling/sync" class="inline">
+                <button type="submit" class="btn-secondary px-4 py-2 inline-flex items-center gap-2" title="Reconcile stored schedules with the OS scheduler">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                    </svg>
+                    Sync OS Scheduler
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Success/Error Messages -->
+    {% if request.query_params.get('message') %}
+    <div class="bg-success-900/30 border-2 border-success-500/50 text-success-400 px-4 py-3 rounded mb-4">
+        {{ request.query_params.get('message') }}
+    </div>
+    {% endif %}
+
+    {% if request.query_params.get('error') %}
+    <div class="bg-danger-900/30 border-2 border-danger-500/50 text-danger-400 px-4 py-3 rounded mb-4">
+        <strong>Error:</strong> {{ request.query_params.get('error') }}
+    </div>
+    {% endif %}
+
+    <!-- HTMX deferred loading: the task table can require pool and disk queries -->
+    <div hx-get="/utils/scheduling/content-partial"
+         hx-trigger="load"
+         hx-swap="innerHTML">
+        <div class="flex flex-col items-center justify-center py-16">
+            <svg class="animate-spin h-10 w-10 text-primary-400 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <p class="text-text-secondary text-lg">Loading scheduled tasks...</p>
+        </div>
+    </div>
+
+    <!-- How scheduling works -->
+    <div class="mt-6 card-nested bg-info-900/20 border-info-700">
+        <h3 class="font-semibold mb-3 text-text-primary">How scheduled tasks run</h3>
+        <ul class="space-y-2 text-sm text-text-secondary">
+            <li>On Linux each enabled task becomes a systemd timer named webzfs-task-TYPE-ID.timer, so tasks run even when no browser session is open.</li>
+            <li>On FreeBSD and NetBSD all enabled tasks live in a single marker-delimited block in the root crontab. Lines outside that block are never touched.</li>
+            <li>Every task type runs through the same runner, which records the outcome and refuses to start a second copy while one is still running.</li>
+            <li>Use Sync OS Scheduler after restoring a configuration backup or editing the JSON schedule files by hand.</li>
+        </ul>
+    </div>
+</div>
+{% endblock %}

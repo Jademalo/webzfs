@@ -1,0 +1,638 @@
+{% extends "layout_main.jinja" %}
+
+{% block content %}
+<div class="container-page max-w-5xl">
+    <!-- Breadcrumb -->
+    <nav class="text-sm mb-6" aria-label="Breadcrumb">
+        <ol class="flex items-center space-x-2">
+            <li><a href="/" class="text-primary-400 hover:text-primary-300 transition-colors">Home</a></li>
+            <li class="text-text-tertiary">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                </svg>
+            </li>
+            <li><a href="/zfs/replication" class="text-primary-400 hover:text-primary-300 transition-colors">Replication</a></li>
+            <li class="text-text-tertiary">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                </svg>
+            </li>
+            <li><a href="/zfs/replication/syncoid" class="text-primary-400 hover:text-primary-300 transition-colors">Syncoid</a></li>
+            <li class="text-text-tertiary">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                </svg>
+            </li>
+            <li class="text-text-primary font-medium">{% if job and job.id %}Edit Job{% else %}Create Job{% endif %}</li>
+        </ol>
+    </nav>
+
+    <!-- Page Header -->
+    <div class="mb-8">
+        <h1 class="text-3xl font-bold text-text-primary mb-2">{% if job and job.id %}Edit Scheduled Syncoid Job{% else %}Create Scheduled Syncoid Job{% endif %}</h1>
+        <p class="text-text-secondary">Scheduled jobs run automatically via the operating system scheduler and use SSH Manager connections for remote replication</p>
+    </div>
+
+    {% if error %}
+        <div id="error-message" class="bg-danger-900/30 border border-danger-700 text-danger-400 px-4 py-3 rounded-lg mb-6 flex items-center">
+            <svg class="w-5 h-5 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <span><strong>Error:</strong> {{ error }}</span>
+        </div>
+    {% endif %}
+
+    <div class="card mb-6">
+        <div class="card-body">
+            <form method="post" action="/zfs/replication/syncoid/jobs/save" id="job-form">
+                {% if job and job.id %}
+                <input type="hidden" name="job_id" value="{{ job.id }}">
+                {% endif %}
+
+                <!-- Job Identity -->
+                <div class="mb-6">
+                    <h3 class="font-semibold text-lg mb-4 text-text-primary flex items-center">
+                        <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-primary-500 text-white text-sm font-bold mr-2">1</span>
+                        Job Details
+                    </h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="form-label" for="name">Job Name <span class="text-danger-400">*</span></label>
+                            <input type="text" name="name" id="name" required class="form-input"
+                                   value="{{ job.name if job else '' }}" placeholder="e.g., Nightly tank backup">
+                        </div>
+                        <div>
+                            <label class="form-label" for="replication_type">Direction</label>
+                            <select name="replication_type" id="replication_type" class="form-select">
+                                <option value="local" {% if job and job.replication_type == 'local' %}selected{% endif %}>Local (this system only)</option>
+                                <option value="push" {% if job and job.replication_type == 'push' %}selected{% endif %}>Push (local source to remote target)</option>
+                                <option value="pull" {% if job and job.replication_type == 'pull' %}selected{% endif %}>Pull (remote source to local target)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Connection and Datasets -->
+                <div class="mb-6">
+                    <h3 class="font-semibold text-lg mb-4 text-text-primary flex items-center">
+                        <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-success-500 text-white text-sm font-bold mr-2">2</span>
+                        Datasets
+                    </h3>
+                    <div id="connection-field" class="mb-4 {% if not job or job.replication_type == 'local' or not job.replication_type %}hidden{% endif %}">
+                        <label class="form-label" for="ssh_connection_id">SSH Connection <span class="text-danger-400">*</span></label>
+                        <select name="ssh_connection_id" id="ssh_connection_id" class="form-select">
+                            <option value="">-- Select Connection --</option>
+                            {% for conn in ssh_connections %}
+                            <option value="{{ conn.id }}" {% if job and job.ssh_connection_id == conn.id %}selected{% endif %}>
+                                {{ conn.name }} ({{ conn.username }}@{{ conn.host }}{% if conn.port != 22 %}:{{ conn.port }}{% endif %})
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <p class="text-text-tertiary text-xs mt-1">
+                            The connection's key, host, and port are resolved at each run.
+                            Manage connections in <a href="/utils/ssh" class="text-primary-400 hover:text-primary-300">Utilities &gt; SSH Manager</a>.
+                        </p>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="form-label" for="source_dataset">Source Dataset <span class="text-danger-400">*</span></label>
+                            <select name="source_dataset" id="source_dataset" required class="form-select"
+                                    data-current="{{ job.source_dataset if job else '' }}">
+                                <option value="">-- Select source dataset --</option>
+                            </select>
+                            <p class="text-text-tertiary text-xs mt-1" id="source-hint">Local datasets are listed automatically; for pull jobs, select an SSH connection to load the remote datasets</p>
+                        </div>
+                        <div>
+                            <label class="form-label" for="target_dataset">Target Parent Dataset <span class="text-danger-400">*</span></label>
+                            <select name="target_dataset" id="target_dataset" required class="form-select"
+                                    data-current="{{ job.target_dataset if job else '' }}">
+                                <option value="">-- Select target parent dataset --</option>
+                            </select>
+                            <p class="text-text-tertiary text-xs mt-1" id="target-hint">Syncoid replicates into the exact dataset named here, so a child name is appended to the selected parent (it is created on first replication). Selecting a parent alone would replicate on top of it and fail.</p>
+                            <label class="form-label mt-2" for="target_new_child">Child Dataset Name <span class="text-danger-400">*</span></label>
+                            <input type="text" name="target_new_child" id="target_new_child" class="form-input"
+                                   placeholder="e.g. acestep (auto-filled from source)">
+                            <p class="text-text-tertiary text-xs mt-1">Full target: <code id="target-full-preview" class="text-info-400">-- select parent and child --</code></p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Schedule -->
+                <div class="mb-6">
+                    <h3 class="font-semibold text-lg mb-4 text-text-primary flex items-center">
+                        <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-info-500 text-white text-sm font-bold mr-2">3</span>
+                        Schedule
+                    </h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="form-label" for="schedule_preset">Preset</label>
+                            <select id="schedule_preset" class="form-select">
+                                <option value="">Custom</option>
+                                {% for preset in schedule_presets %}
+                                <option value="{{ preset.expression }}" {% if job and job.schedule == preset.expression %}selected{% endif %}>{{ preset.label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="form-label" for="schedule">Cron Expression <span class="text-danger-400">*</span></label>
+                            <input type="text" name="schedule" id="schedule" required class="form-input"
+                                   value="{{ job.schedule if job else '0 2 * * *' }}" placeholder="0 2 * * *">
+                            <p id="schedule-status" class="text-text-tertiary text-xs mt-1">minute hour day month weekday (local time)</p>
+                        </div>
+                    </div>
+                    <div id="next-runs" class="hidden mt-3 bg-bg-elevated-3 border border-border-default rounded-lg px-4 py-3 text-sm text-text-secondary"></div>
+                    <label class="flex items-center mt-4">
+                        <input type="checkbox" name="enabled" value="true" class="form-checkbox"
+                               {% if not job or job.enabled %}checked{% endif %}>
+                        <span class="ml-3 text-text-secondary">Enabled (job runs on schedule)</span>
+                    </label>
+                </div>
+
+                <!-- Options -->
+                <div class="mb-6">
+                    <h3 class="font-semibold text-lg mb-4 text-text-primary flex items-center">
+                        <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-warning-500 text-white text-sm font-bold mr-2">4</span>
+                        Syncoid Options
+                    </h3>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                        <div>
+                            <label class="form-label" for="compress">Compression</label>
+                            <select name="compress" id="compress" class="form-select">
+                                <option value="" {% if not job or not job.compress %}selected{% endif %}>Default</option>
+                                <option value="lz4" {% if job and job.compress == 'lz4' %}selected{% endif %}>lz4</option>
+                                <option value="zstd" {% if job and job.compress == 'zstd' %}selected{% endif %}>zstd</option>
+                                <option value="gzip" {% if job and job.compress == 'gzip' %}selected{% endif %}>gzip</option>
+                                <option value="xz" {% if job and job.compress == 'xz' %}selected{% endif %}>xz</option>
+                                <option value="none" {% if job and job.compress == 'none' %}selected{% endif %}>none</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="form-label" for="source_bwlimit">Source Bandwidth Limit</label>
+                            <input type="text" name="source_bwlimit" id="source_bwlimit" class="form-input"
+                                   value="{{ job.source_bwlimit if job and job.source_bwlimit else '' }}" placeholder="e.g., 10M, 1G">
+                        </div>
+                        <div>
+                            <label class="form-label" for="target_bwlimit">Target Bandwidth Limit</label>
+                            <input type="text" name="target_bwlimit" id="target_bwlimit" class="form-input"
+                                   value="{{ job.target_bwlimit if job and job.target_bwlimit else '' }}" placeholder="e.g., 10M, 1G">
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <label class="flex items-center">
+                            <input type="checkbox" name="recursive" value="true" class="form-checkbox" {% if job and job.recursive %}checked{% endif %}>
+                            <span class="ml-3 text-text-secondary">Recursive (replicate child datasets)</span>
+                        </label>
+                        <label class="flex items-center">
+                            <input type="checkbox" name="no_sync_snap" value="true" class="form-checkbox" {% if job and job.no_sync_snap %}checked{% endif %}>
+                            <span class="ml-3 text-text-secondary">Don't create sync snapshots</span>
+                        </label>
+                        <label class="flex items-center">
+                            <input type="checkbox" name="skip_parent" value="true" class="form-checkbox" {% if job and job.skip_parent %}checked{% endif %}>
+                            <span class="ml-3 text-text-secondary">Skip parent dataset</span>
+                        </label>
+                        <label class="flex items-center">
+                            <input type="checkbox" name="create_bookmark" value="true" class="form-checkbox" {% if job and job.create_bookmark %}checked{% endif %}>
+                            <span class="ml-3 text-text-secondary">Create bookmarks</span>
+                        </label>
+                        <label class="flex items-center">
+                            <input type="checkbox" name="force_delete" value="true" class="form-checkbox" {% if job and job.force_delete %}checked{% endif %}>
+                            <span class="ml-3 text-text-secondary">Force delete conflicts</span>
+                        </label>
+                        <label class="flex items-center">
+                            <input type="checkbox" name="large_blocks" value="true" class="form-checkbox" {% if job and job.large_blocks %}checked{% endif %}>
+                            <span class="ml-3 text-text-secondary">Large blocks (zfs send -L, for recordsize larger than 128 KiB)</span>
+                        </label>
+                    </div>
+                    <p id="large-blocks-hint" class="hidden mt-2 text-xs text-info-400">
+                        Large blocks was enabled automatically because the source dataset uses a recordsize larger than 128 KiB.
+                    </p>
+                </div>
+
+                <!-- Command Preview -->
+                <div class="mb-6 pt-4 border-t border-border-subtle">
+                    <label class="form-label flex items-center">
+                        <svg class="w-4 h-4 mr-2 text-info-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                        </svg>
+                        Command Preview
+                    </label>
+                    <div id="command-preview" class="bg-bg-elevated-2 rounded-lg p-4 font-mono text-sm text-info-400 border border-border-default overflow-x-auto whitespace-pre-wrap">
+                        <span class="text-text-tertiary">Select a source dataset and target to preview the command.</span>
+                    </div>
+                    <p class="text-text-tertiary text-xs mt-1">This is the syncoid command the scheduler will run. SSH key and host options are added automatically from the selected connection at each run.</p>
+                </div>
+
+                <!-- Confirmation Checkbox -->
+                <div class="mb-6">
+                    <label class="flex items-center">
+                        <input type="checkbox" id="confirm-command" class="form-checkbox">
+                        <span class="ml-3 text-text-secondary font-medium">I have reviewed the replication command above and want to proceed</span>
+                    </label>
+                </div>
+
+                <!-- Actions -->
+                <div class="flex items-center justify-between pt-4 border-t border-border-subtle">
+                    <button type="submit" id="save-btn" disabled class="btn-primary opacity-50 cursor-not-allowed">
+                        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                        </svg>
+                        {% if job and job.id %}Save Changes{% else %}Create Job{% endif %}
+                    </button>
+                    <a href="/zfs/replication/syncoid" class="btn-secondary">
+                        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+                        </svg>
+                        Cancel
+                    </a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- How scheduling works -->
+    <div class="card-nested bg-info-900/20 border-info-700">
+        <h3 class="font-semibold mb-3 text-text-primary">How scheduled jobs run</h3>
+        <ul class="space-y-2 text-sm text-text-secondary">
+            <li>On Linux, each enabled job is registered as a systemd timer (webzfs-syncoid-job-ID.timer) that runs even when the browser is closed.</li>
+            <li>On FreeBSD and NetBSD, jobs are registered in the root crontab inside a WebZFS-managed block.</li>
+            <li>Remote jobs use the selected SSH Manager connection; the key and host details are resolved fresh at each run, so key rotation does not require editing jobs.</li>
+            <li>If a run is still in progress when the next occurrence fires, the new occurrence is skipped and recorded as skipped.</li>
+            <li>Results appear on the Replication History page.</li>
+        </ul>
+    </div>
+</div>
+
+<script>
+(function() {
+    const typeSelect = document.getElementById('replication_type');
+    const connectionField = document.getElementById('connection-field');
+    const presetSelect = document.getElementById('schedule_preset');
+    const scheduleInput = document.getElementById('schedule');
+    const scheduleStatus = document.getElementById('schedule-status');
+    const nextRunsBox = document.getElementById('next-runs');
+    let validateTimer = null;
+
+    // Dataset dropdown population. Local datasets are rendered by the
+    // server; remote datasets are fetched through the selected SSH
+    // Manager connection, mirroring the Send/Receive form behavior.
+    const localDatasets = {{ (local_datasets or []) | tojson }};
+    const sourceSelect = document.getElementById('source_dataset');
+    const targetSelect = document.getElementById('target_dataset');
+    const targetNewChild = document.getElementById('target_new_child');
+    let remoteDatasets = null;
+    let remoteLoadedForConnection = null;
+
+    function fillSelect(select, names, placeholder) {
+        const saved = select.dataset.current || '';
+        const previous = select.value || saved;
+        select.innerHTML = '';
+        const blank = document.createElement('option');
+        blank.value = '';
+        blank.textContent = placeholder;
+        select.appendChild(blank);
+        let matched = false;
+        names.forEach(function(name) {
+            const option = document.createElement('option');
+            option.value = name;
+            option.textContent = name;
+            if (name === previous) { option.selected = true; matched = true; }
+            select.appendChild(option);
+        });
+        // Keep a saved value visible even if it is not in the list
+        // (e.g. remote list not loaded yet, or dataset renamed).
+        if (previous && !matched) {
+            const keep = document.createElement('option');
+            keep.value = previous;
+            keep.textContent = previous + ' (saved value)';
+            keep.selected = true;
+            select.appendChild(keep);
+        }
+    }
+
+    async function loadRemoteDatasets() {
+        const connectionId = sshConnectionSelect.value;
+        if (!connectionId) {
+            remoteDatasets = null;
+            remoteLoadedForConnection = null;
+            return [];
+        }
+        if (remoteDatasets && remoteLoadedForConnection === connectionId) {
+            return remoteDatasets;
+        }
+        try {
+            const response = await fetch('/zfs/replication/api/test-remote-connection', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ssh_connection_id: connectionId })
+            });
+            const data = await response.json();
+            if (data.success) {
+                remoteDatasets = data.datasets;
+                remoteLoadedForConnection = connectionId;
+                return remoteDatasets;
+            }
+        } catch (err) {
+            // Fall through to empty list; saved value stays selectable
+        }
+        remoteDatasets = null;
+        remoteLoadedForConnection = null;
+        return [];
+    }
+
+    // On the edit form the saved target is the full dataset name
+    // (parent/child). Split it against the available parent list so
+    // the parent lands in the dropdown and the remainder in the child
+    // field. The longest matching parent wins.
+    function splitSavedTarget(names) {
+        const saved = targetSelect.value;
+        if (!saved || targetNewChild.value) { return; }
+        if (names.indexOf(saved) !== -1) { return; }
+        let bestParent = '';
+        names.forEach(function(name) {
+            if (saved.indexOf(name + '/') === 0 && name.length > bestParent.length) {
+                bestParent = name;
+            }
+        });
+        if (bestParent) {
+            targetNewChild.value = saved.slice(bestParent.length + 1);
+            // Re-select the parent; drop the "(saved value)" keep option
+            for (let i = targetSelect.options.length - 1; i >= 0; i--) {
+                if (targetSelect.options[i].value === saved) {
+                    targetSelect.remove(i);
+                }
+            }
+            targetSelect.value = bestParent;
+        }
+    }
+
+    function updateTargetPreview() {
+        const preview = document.getElementById('target-full-preview');
+        const base = targetSelect.value;
+        const child = (targetNewChild.value || '').trim().replace(/^\/+|\/+$/g, '');
+        if (base && child) {
+            preview.textContent = base + '/' + child;
+        } else if (base) {
+            preview.textContent = base + ' (no child; replicates directly into this dataset)';
+        } else {
+            preview.textContent = '-- select parent and child --';
+        }
+    }
+
+    // Auto-fill the child name from the source dataset's last path
+    // component (zstor/ai/acestep pushed to zdata targets
+    // zdata/acestep). Manual edits to the child field are respected.
+    let childAutoFilled = !targetNewChild.value;
+    function autoFillChildFromSource() {
+        if (!childAutoFilled) { return; }
+        const source = sourceSelect.value;
+        if (!source) { return; }
+        const parts = source.split('/');
+        targetNewChild.value = parts[parts.length - 1];
+        updateTargetPreview();
+    }
+    targetNewChild.addEventListener('input', function() {
+        childAutoFilled = false;
+        updateTargetPreview();
+    });
+    targetSelect.addEventListener('change', updateTargetPreview);
+
+    async function refreshDatasetDropdowns() {
+        const direction = typeSelect.value;
+        if (direction === 'pull') {
+            fillSelect(targetSelect, localDatasets, '-- Select target parent dataset --');
+            splitSavedTarget(localDatasets);
+            const remote = await loadRemoteDatasets();
+            fillSelect(sourceSelect, remote,
+                remote.length ? '-- Select source dataset --' : '-- Select SSH connection to load remote datasets --');
+        } else if (direction === 'push') {
+            fillSelect(sourceSelect, localDatasets, '-- Select source dataset --');
+            const remote = await loadRemoteDatasets();
+            fillSelect(targetSelect, remote,
+                remote.length ? '-- Select target parent dataset --' : '-- Select SSH connection to load remote datasets --');
+            splitSavedTarget(remote);
+        } else {
+            fillSelect(sourceSelect, localDatasets, '-- Select source dataset --');
+            fillSelect(targetSelect, localDatasets, '-- Select target parent dataset --');
+            splitSavedTarget(localDatasets);
+        }
+        autoFillChildFromSource();
+        updateTargetPreview();
+    }
+
+    // The parent and child are combined server-side in
+    // syncoid_job_save(); the child field is submitted as
+    // target_new_child. No client-side combining happens here.
+
+    function updateConnectionVisibility() {
+        const needsConnection = typeSelect.value === 'push' || typeSelect.value === 'pull';
+        connectionField.classList.toggle('hidden', !needsConnection);
+    }
+
+    typeSelect.addEventListener('change', function() {
+        updateConnectionVisibility();
+        refreshDatasetDropdowns();
+    });
+    updateConnectionVisibility();
+
+    presetSelect.addEventListener('change', function() {
+        if (this.value) {
+            scheduleInput.value = this.value;
+            validateSchedule();
+        }
+    });
+
+    async function validateSchedule() {
+        const expression = scheduleInput.value.trim();
+        if (!expression) { return; }
+        try {
+            const response = await fetch('/zfs/replication/syncoid/jobs/validate-schedule', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ schedule: expression })
+            });
+            const data = await response.json();
+            if (data.valid) {
+                scheduleStatus.textContent = 'Valid schedule';
+                scheduleStatus.className = 'text-success-400 text-xs mt-1';
+                nextRunsBox.classList.remove('hidden');
+                nextRunsBox.innerHTML = '<strong class="text-text-primary">Next runs:</strong> '
+                    + data.next_runs.join(', ');
+            } else {
+                scheduleStatus.textContent = data.error || 'Invalid schedule';
+                scheduleStatus.className = 'text-danger-400 text-xs mt-1';
+                nextRunsBox.classList.add('hidden');
+            }
+        } catch (err) {
+            scheduleStatus.textContent = 'Could not validate schedule';
+            scheduleStatus.className = 'text-warning-400 text-xs mt-1';
+        }
+    }
+
+    scheduleInput.addEventListener('input', function() {
+        clearTimeout(validateTimer);
+        validateTimer = setTimeout(validateSchedule, 500);
+    });
+
+    validateSchedule();
+
+    // Auto-check the Large blocks option when the source dataset uses
+    // a recordsize or volblocksize larger than 128 KiB (zfs send -L).
+    // For pull jobs the source lives on the remote system, so the
+    // selected SSH connection is passed for the lookup.
+    const sourceDatasetInput = document.getElementById('source_dataset');
+    const sshConnectionSelect = document.getElementById('ssh_connection_id');
+    const largeBlocksCheckbox = document.querySelector('input[name="large_blocks"]');
+    const largeBlocksHint = document.getElementById('large-blocks-hint');
+    let largeBlocksTimer = null;
+
+    async function checkLargeBlocks() {
+        if (!largeBlocksCheckbox) return;
+        const dataset = sourceDatasetInput.value.trim();
+        if (!dataset) {
+            largeBlocksHint.classList.add('hidden');
+            return;
+        }
+        const sourceIsRemote = typeSelect.value === 'pull';
+        try {
+            const response = await fetch('/zfs/replication/api/check-large-blocks', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    dataset: dataset,
+                    ssh_connection_id: sourceIsRemote ? (sshConnectionSelect.value || null) : null
+                })
+            });
+            const data = await response.json();
+            if (data.success && data.large_blocks) {
+                largeBlocksCheckbox.checked = true;
+                largeBlocksHint.classList.remove('hidden');
+            } else {
+                largeBlocksHint.classList.add('hidden');
+            }
+        } catch (err) {
+            // Non-fatal; the user can still set the option manually
+            largeBlocksHint.classList.add('hidden');
+        }
+    }
+
+    sourceDatasetInput.addEventListener('change', function() {
+        autoFillChildFromSource();
+        clearTimeout(largeBlocksTimer);
+        largeBlocksTimer = setTimeout(checkLargeBlocks, 200);
+    });
+    sshConnectionSelect.addEventListener('change', function() {
+        remoteDatasets = null;
+        remoteLoadedForConnection = null;
+        refreshDatasetDropdowns().then(function() {
+            checkLargeBlocks();
+            updateCommandPreview();
+        });
+    });
+    typeSelect.addEventListener('change', checkLargeBlocks);
+
+    // Command preview and confirmation. Mirrors the syncoid command
+    // built by SyncoidService.execute_replication() from the runner's
+    // job options; SSH key and -o options are resolved at run time
+    // from the SSH Manager connection and noted in the preview.
+    const commandPreview = document.getElementById('command-preview');
+    const confirmCheckbox = document.getElementById('confirm-command');
+    const saveBtn = document.getElementById('save-btn');
+    const compressSelect = document.getElementById('compress');
+    const sourceBwInput = document.getElementById('source_bwlimit');
+    const targetBwInput = document.getElementById('target_bwlimit');
+
+    function optionCheckbox(name) {
+        return document.querySelector('input[name="' + name + '"]');
+    }
+
+    function fullTargetName() {
+        const base = targetSelect.value;
+        const child = (targetNewChild.value || '').trim().replace(/^\/+|\/+$/g, '');
+        if (base && child) { return base + '/' + child; }
+        return base;
+    }
+
+    function resetConfirmation() {
+        confirmCheckbox.checked = false;
+        saveBtn.disabled = true;
+        saveBtn.classList.add('opacity-50', 'cursor-not-allowed');
+    }
+
+    function updateCommandPreview() {
+        const source = sourceSelect.value;
+        const target = fullTargetName();
+        const direction = typeSelect.value;
+
+        if (!source || !target) {
+            commandPreview.innerHTML = '<span class="text-text-tertiary">Select a source dataset and target to preview the command.</span>';
+            resetConfirmation();
+            return;
+        }
+
+        const parts = ['syncoid'];
+        if (optionCheckbox('recursive').checked) { parts.push('-r'); }
+        if (optionCheckbox('no_sync_snap').checked) { parts.push('--no-sync-snap'); }
+        if (compressSelect.value) { parts.push('--compress ' + compressSelect.value); }
+        if (sourceBwInput.value.trim()) { parts.push('--source-bwlimit ' + sourceBwInput.value.trim()); }
+        if (targetBwInput.value.trim()) { parts.push('--target-bwlimit ' + targetBwInput.value.trim()); }
+        if (optionCheckbox('skip_parent').checked) { parts.push('--skip-parent'); }
+        if (optionCheckbox('create_bookmark').checked) { parts.push('--create-bookmark'); }
+        if (optionCheckbox('force_delete').checked) { parts.push('--force-delete'); }
+        if (largeBlocksCheckbox.checked) { parts.push('--sendoptions=L'); }
+
+        let hostPrefix = '<user>@<host>:';
+        const selectedConn = sshConnectionSelect.options[sshConnectionSelect.selectedIndex];
+        if (sshConnectionSelect.value && selectedConn) {
+            const match = selectedConn.textContent.match(/\(([^)]+)\)/);
+            if (match) { hostPrefix = match[1].split(':')[0] + ':'; }
+        }
+
+        let sourceStr = source;
+        let targetStr = target;
+        let sshNote = '';
+        if (direction === 'push') {
+            targetStr = hostPrefix + target;
+            sshNote = '\n# --sshkey and --sshoption flags are added from the SSH connection at run time';
+        } else if (direction === 'pull') {
+            sourceStr = hostPrefix + source;
+            sshNote = '\n# --sshkey and --sshoption flags are added from the SSH connection at run time';
+        }
+
+        parts.push(sourceStr);
+        parts.push(targetStr);
+        commandPreview.textContent = parts.join(' ') + sshNote;
+        resetConfirmation();
+    }
+
+    confirmCheckbox.addEventListener('change', function() {
+        if (this.checked && sourceSelect.value && fullTargetName()) {
+            saveBtn.disabled = false;
+            saveBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+        } else {
+            saveBtn.disabled = true;
+            saveBtn.classList.add('opacity-50', 'cursor-not-allowed');
+        }
+    });
+
+    // Refresh the preview when anything that affects the command changes
+    sourceSelect.addEventListener('change', updateCommandPreview);
+    targetSelect.addEventListener('change', updateCommandPreview);
+    targetNewChild.addEventListener('input', updateCommandPreview);
+    typeSelect.addEventListener('change', updateCommandPreview);
+    compressSelect.addEventListener('change', updateCommandPreview);
+    sourceBwInput.addEventListener('input', updateCommandPreview);
+    targetBwInput.addEventListener('input', updateCommandPreview);
+    ['recursive', 'no_sync_snap', 'skip_parent', 'create_bookmark',
+     'force_delete', 'large_blocks'].forEach(function(name) {
+        const box = optionCheckbox(name);
+        if (box) { box.addEventListener('change', updateCommandPreview); }
+    });
+
+    // Initial population (also restores saved values on the edit form)
+    refreshDatasetDropdowns().then(function() {
+        checkLargeBlocks();
+        updateCommandPreview();
+    });
+})();
+</script>
+{% endblock %}

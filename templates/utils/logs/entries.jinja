@@ -1,0 +1,73 @@
+{% if entries %}
+<div class="overflow-x-auto">
+    <table class="w-full">
+        <thead>
+            <tr class="bg-surface-700/50 text-left">
+                <th class="px-4 py-3 text-text-secondary font-medium text-sm w-44">Timestamp</th>
+                <th class="px-4 py-3 text-text-secondary font-medium text-sm w-20">Level</th>
+                <th class="px-4 py-3 text-text-secondary font-medium text-sm">Details</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-surface-600">
+            {% for entry in entries %}
+            <tr class="hover:bg-surface-700/30 transition-colors">
+                <td class="px-4 py-3 font-mono text-sm text-text-secondary whitespace-nowrap">
+                    {{ entry.timestamp }}
+                </td>
+                <td class="px-4 py-3">
+                    {% if entry.level == 'INFO' %}
+                    <span class="px-2 py-1 text-xs font-medium rounded-full bg-success-500/20 text-success-400">INFO</span>
+                    {% elif entry.level == 'WARNING' %}
+                    <span class="px-2 py-1 text-xs font-medium rounded-full bg-warning-500/20 text-warning-400">WARN</span>
+                    {% elif entry.level == 'ERROR' %}
+                    <span class="px-2 py-1 text-xs font-medium rounded-full bg-danger-500/20 text-danger-400">ERROR</span>
+                    {% else %}
+                    <span class="px-2 py-1 text-xs font-medium rounded-full bg-surface-600 text-text-secondary">{{ entry.level }}</span>
+                    {% endif %}
+                </td>
+                <td class="px-4 py-3">
+                    <div class="flex flex-wrap gap-2">
+                        {% for key, value in entry.details.items() %}
+                        <span class="inline-flex items-center gap-1 text-sm">
+                            <span class="text-text-secondary">{{ key }}:</span>
+                            {% if key == 'status' and value == 'SUCCESS' %}
+                            <span class="text-success-400 font-medium">{{ value }}</span>
+                            {% elif key == 'status' and value == 'FAILED' %}
+                            <span class="text-danger-400 font-medium">{{ value }}</span>
+                            {% elif key == 'status' and value == 'RATE_LIMITED' %}
+                            <span class="text-warning-400 font-medium">{{ value }}</span>
+                            {% elif key == 'user' %}
+                            <span class="text-primary-400 font-medium">{{ value }}</span>
+                            {% elif key == 'operation' %}
+                            <span class="text-info-400 font-medium">{{ value }}</span>
+                            {% elif key == 'action' %}
+                            <span class="text-info-400 font-medium">{{ value }}</span>
+                            {% elif key == 'error' %}
+                            <span class="text-danger-400">{{ value }}</span>
+                            {% else %}
+                            <span class="text-text-primary">{{ value }}</span>
+                            {% endif %}
+                        </span>
+                        {% endfor %}
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="p-8 text-center">
+    <svg class="w-16 h-16 mx-auto text-text-secondary mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+    </svg>
+    <h3 class="text-xl font-semibold text-text-primary mb-2">No Log Entries</h3>
+    <p class="text-text-secondary">
+        {% if search %}
+        No entries matching "{{ search }}" found.
+        {% else %}
+        The log file is empty or does not exist yet.
+        {% endif %}
+    </p>
+</div>
+{% endif %}

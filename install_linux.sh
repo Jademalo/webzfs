@@ -90,14 +90,64 @@ if ! command_exists node; then
     exit 1
 fi
 
-echo -e "${GREEN}✓${NC} Node.js $(node --version) found"
-
 if ! command_exists npm; then
     echo -e "${RED}Error: npm is not installed${NC}"
+    echo "Please install npm and try again"
     exit 1
 fi
 
+# Reject Snap-packaged Node.js/npm (GitHub issue #209).
+# The build steps (npm install, npm run build:css) run as the webzfs
+# service account with HOME=/opt/webzfs. Snapd refuses to run snaps for
+# users whose home directory is outside /home, which makes the Node Snap
+# unusable for the WebZFS build. A system Node.js/npm must be installed
+# instead. The existing Snap does not need to be removed.
+NODE_REAL_PATH=$(readlink -f "$(command -v node)" 2>/dev/null || true)
+NPM_REAL_PATH=$(readlink -f "$(command -v npm)" 2>/dev/null || true)
+
+case "$NODE_REAL_PATH:$NPM_REAL_PATH" in
+    /snap/*|*:/snap/*)
+        echo -e "${RED}Error: Node.js/npm are installed as a Snap package${NC}"
+        echo
+        echo "The Node Snap cannot be used by the WebZFS installer because the"
+        echo "build runs as the 'webzfs' service account with HOME=/opt/webzfs,"
+        echo "and snapd rejects home directories outside of /home."
+        echo
+        echo "Please install a system (non-Snap) Node.js 20+ and npm, then"
+        echo "rerun this installer. For example, on Debian/Ubuntu:"
+        echo
+        echo "  sudo apt update"
+        echo "  sudo apt install nodejs npm"
+        echo
+        echo "The existing Node Snap does not need to be removed; the system"
+        echo "packages can coexist with it. If both are installed, ensure the"
+        echo "non-Snap node/npm come first in PATH."
+        exit 1
+        ;;
+esac
+
+# Enforce the Node.js 20+ requirement
+NODE_VERSION=$(node --version 2>/dev/null | sed 's/^v//')
+NODE_MAJOR=$(echo "$NODE_VERSION" | cut -d. -f1)
+
+case "$NODE_MAJOR" in
+    ''|*[!0-9]*)
+        echo -e "${RED}Error: Unable to determine the Node.js version${NC}"
+        echo "Please install Node.js v20 or newer and try again"
+        exit 1
+        ;;
+esac
+
+if [ "$NODE_MAJOR" -lt 20 ]; then
+    echo -e "${RED}Error: Node.js 20+ is required (found ${NODE_VERSION})${NC}"
+    echo "Please install Node.js v20 or newer and try again"
+    exit 1
+fi
+
+
+echo -e "${GREEN}✓${NC} Node.js $(node --version) found"
 echo -e "${GREEN}✓${NC} npm $(npm --version) found"
+
 
 # Check for sudo
 # WebZFS runs as the unprivileged webzfs user and requires sudo to execute
@@ -228,6 +278,9 @@ fi
 if [ ! -f "${DATA_DIR}/health_reports.json" ]; then
     echo '{"reports": []}' > "${DATA_DIR}/health_reports.json"
 fi
+if [ ! -f "${DATA_DIR}/health_schedules.json" ]; then
+    echo '{"schedules": [], "next_id": 1}' > "${DATA_DIR}/health_schedules.json"
+fi
 
 chown -R "$WEBZFS_USER:$WEBZFS_USER" "$DATA_DIR"
 echo -e "${GREEN}✓${NC} Data directory and files created"
@@ -339,6 +392,22 @@ webzfs ALL=(ALL) NOPASSWD: /usr/bin/systemctl, /bin/systemctl
 # Crontab editing
 webzfs ALL=(ALL) NOPASSWD: /usr/bin/crontab
 
+# Scheduled syncoid job timers.
+# Unit files are created and edited with "sudo tee" (covered by the
+# general tee entry below) and enabled/disabled/reloaded with
+# "sudo systemctl" (covered by the systemctl entry above). The explicit
+# tee entries here document that intent and keep timer management
+# working even if the general tee entry is ever narrowed. rm is
+# restricted to WebZFS-owned unit files only.
+webzfs ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/webzfs-syncoid-job-*, /bin/tee /etc/systemd/system/webzfs-syncoid-job-*
+webzfs ALL=(ALL) NOPASSWD: /usr/bin/rm -f /etc/systemd/system/webzfs-syncoid-job-*, /bin/rm -f /etc/systemd/system/webzfs-syncoid-job-*
+
+# Unified Scheduling Hub timers. All scheduled task types (scrub, SMART
+# self-test, health check, and replication) use the webzfs-task-* unit
+# naming scheme managed by services/job_scheduler.py.
+webzfs ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/webzfs-task-*, /bin/tee /etc/systemd/system/webzfs-task-*
+webzfs ALL=(ALL) NOPASSWD: /usr/bin/rm -f /etc/systemd/system/webzfs-task-*, /bin/rm -f /etc/systemd/system/webzfs-task-*
+
 # File editing (for config files like smartd.conf, sanoid.conf)
 webzfs ALL=(ALL) NOPASSWD: /usr/bin/cat, /usr/bin/tee, /usr/bin/mkdir
 
@@ -434,5 +503,11 @@ echo
 echo "To access the web interface:"
 echo "  http://localhost:26619"
 echo
+echo -e "${YELLOW}IMPORTANT: The WebUI binds to 127.0.0.1 by default and will NOT be${NC}"
+echo -e "${YELLOW}reachable from other machines on your local network. To access it${NC}"
+echo -e "${YELLOW}remotely, either change the HOST setting in $INSTALL_DIR/.env or use${NC}"
+echo -e "${YELLOW}SSH port forwarding. See the 'Access' section of the README for details.${NC}"
+echo
 echo "For more information, see: $INSTALL_DIR/BUILD_AND_RUN.md"
 echo
+

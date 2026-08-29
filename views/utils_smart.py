@@ -6,7 +6,8 @@ from fastapi import APIRouter, Request, Form, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse, StreamingResponse, Response
 from typing import Annotated, Optional
 from config.templates import templates
-from services.smart_monitoring import SMARTMonitoringService
+from services.smart_monitoring import ALL_DISKS, SMARTMonitoringService
+from services.job_scheduler import TaskScheduler
 from auth.dependencies import get_current_user
 from datetime import datetime
 import io
@@ -15,6 +16,9 @@ import zipfile
 
 router = APIRouter(tags=["smart"], dependencies=[Depends(get_current_user)])
 smart_service = SMARTMonitoringService()
+# Scheduled SMART tests are registered with the OS scheduler so they
+# actually execute; see services/job_scheduler.py.
+task_scheduler = TaskScheduler()
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -566,31 +570,13 @@ async def restart_smartd(request: Request):
 
 @router.get("/scheduled", response_class=HTMLResponse)
 async def scheduled_tests(request: Request):
-    """Display scheduled SMART tests"""
-    try:
-        scheduled = smart_service.list_scheduled_tests()
-        disks = smart_service.list_disks()
-        
-        return templates.TemplateResponse(
-            request,
-            name="utils/smart/scheduled.jinja",
-            context={
-                "scheduled_tests": scheduled,
-                "disks": disks,
-                "page_title": "Scheduled SMART Tests"
-            }
-        )
-    except Exception as e:
-        return templates.TemplateResponse(
-            request,
-            name="utils/smart/scheduled.jinja",
-            context={
-                "scheduled_tests": [],
-                "disks": [],
-                "error": str(e),
-                "page_title": "Scheduled SMART Tests"
-            }
-        )
+    """Redirect to the Unified Scheduling Hub.
+
+    Scheduled SMART tests are managed alongside scrubs, health checks,
+    and replication jobs on /utils/scheduling. The old page is kept as a
+    redirect so bookmarks and older links keep working.
+    """
+    return RedirectResponse(url="/utils/scheduling", status_code=303)
 
 
 @router.post("/scheduled/create", response_class=HTMLResponse)
@@ -601,34 +587,48 @@ async def create_scheduled_test(
     schedule: Annotated[str, Form()],
     enabled: Annotated[bool, Form()] = True
 ):
-    """Create a new scheduled SMART test"""
+    """Create a new scheduled SMART test.
+
+    The schedule is also registered with the OS scheduler so the test
+    actually runs. Previously these records were stored but never
+    executed (Unified Scheduling Hub).
+    """
     try:
         schedule_id = smart_service.create_scheduled_test(
             disk, test_type, schedule, enabled
         )
+        disk_text = "all disks" if disk == ALL_DISKS else disk
+        task_scheduler.register_task(
+            task_type="smart",
+            task_id=schedule_id,
+            schedule=schedule,
+            description=f"{test_type} test on {disk_text}",
+            enabled=enabled,
+        )
         return RedirectResponse(
-            url="/utils/smart/scheduled?message=Scheduled test created successfully",
+            url="/utils/scheduling?message=Scheduled test created successfully",
             status_code=303
         )
     except Exception as e:
         return RedirectResponse(
-            url=f"/utils/smart/scheduled?error={str(e)}",
+            url=f"/utils/scheduling?error={str(e)}",
             status_code=303
         )
 
 
 @router.post("/scheduled/{schedule_id}/delete", response_class=HTMLResponse)
 async def delete_scheduled_test(request: Request, schedule_id: str):
-    """Delete a scheduled SMART test"""
+    """Delete a scheduled SMART test and its OS scheduler entry"""
     try:
+        task_scheduler.unregister_task("smart", schedule_id)
         smart_service.delete_scheduled_test(schedule_id)
         return RedirectResponse(
-            url="/utils/smart/scheduled?message=Scheduled test deleted successfully",
+            url="/utils/scheduling?message=Scheduled test deleted successfully",
             status_code=303
         )
     except Exception as e:
         return RedirectResponse(
-            url=f"/utils/smart/scheduled?error={str(e)}",
+            url=f"/utils/scheduling?error={str(e)}",
             status_code=303
         )
 
@@ -641,17 +641,30 @@ async def toggle_scheduled_test(request: Request, schedule_id: str):
         test = next((t for t in scheduled if t['id'] == schedule_id), None)
         
         if test:
+            new_state = not test.get('enabled', True)
             smart_service.update_scheduled_test(
                 schedule_id,
-                enabled=not test.get('enabled', True)
+                enabled=new_state
+            )
+            toggled_disk = test.get('disk', 'unknown')
+            if toggled_disk == ALL_DISKS:
+                toggled_disk = 'all disks'
+            task_scheduler.register_task(
+                task_type="smart",
+                task_id=schedule_id,
+                schedule=test.get('schedule', ''),
+                description=(
+                    f"{test.get('test_type', 'short')} test on {toggled_disk}"
+                ),
+                enabled=new_state,
             )
         
         return RedirectResponse(
-            url="/utils/smart/scheduled?message=Scheduled test updated successfully",
+            url="/utils/scheduling?message=Scheduled test updated successfully",
             status_code=303
         )
     except Exception as e:
         return RedirectResponse(
-            url=f"/utils/smart/scheduled?error={str(e)}",
+            url=f"/utils/scheduling?error={str(e)}",
             status_code=303
         )

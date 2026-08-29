@@ -3,6 +3,7 @@ ZFS Pool Management Views
 Provides web interface for ZFS pool operations
 """
 import re
+from urllib.parse import urlencode
 from fastapi import APIRouter, Request, Form, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from typing import Annotated
@@ -726,8 +727,16 @@ async def import_pool(
         )
     except Exception as e:
         audit_logger.log_pool_import(user=current_user, pool_name=pool_name, force=force, success=False, error=str(e))
+        # Carry the full failure reason back to the import page, along with
+        # which pool failed and whether force was already attempted, so the
+        # page can show the reason and offer a force import when appropriate.
+        error_params = urlencode({
+            "error": str(e),
+            "failed_pool": pool_name,
+            "force_attempted": "true" if force else "false",
+        })
         return RedirectResponse(
-            url="/zfs/pools/import/list?error=" + str(e),
+            url=f"/zfs/pools/import/list?{error_params}",
             status_code=303
         )
 

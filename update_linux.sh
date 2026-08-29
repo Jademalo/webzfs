@@ -63,6 +63,80 @@ if ! id "$WEBZFS_USER" &>/dev/null; then
     exit 1
 fi
 
+# Function to check if command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Node.js/npm preflight (GitHub issue #209).
+# The update rebuilds CSS with npm install and npm run build:css as the
+# webzfs service account. Verify a usable non-Snap Node.js 20+ toolchain
+# exists before stopping the service or touching any files.
+echo "Checking Node.js/npm prerequisites..."
+
+if ! command_exists node; then
+    echo -e "${RED}Error: Node.js is not installed${NC}"
+    echo "Please install Node.js v20+ and try again"
+    exit 1
+fi
+
+if ! command_exists npm; then
+    echo -e "${RED}Error: npm is not installed${NC}"
+    echo "Please install npm and try again"
+    exit 1
+fi
+
+# Reject Snap-packaged Node.js/npm. The build steps run as the webzfs
+# service account with HOME=/opt/webzfs. Snapd refuses to run snaps for
+# users whose home directory is outside /home, which makes the Node Snap
+# unusable for the WebZFS build. A system Node.js/npm must be installed
+# instead. The existing Snap does not need to be removed.
+NODE_REAL_PATH=$(readlink -f "$(command -v node)" 2>/dev/null || true)
+NPM_REAL_PATH=$(readlink -f "$(command -v npm)" 2>/dev/null || true)
+
+case "$NODE_REAL_PATH:$NPM_REAL_PATH" in
+    /snap/*|*:/snap/*)
+        echo -e "${RED}Error: Node.js/npm are installed as a Snap package${NC}"
+        echo
+        echo "The Node Snap cannot be used by the WebZFS updater because the"
+        echo "build runs as the 'webzfs' service account with HOME=/opt/webzfs,"
+        echo "and snapd rejects home directories outside of /home."
+        echo
+        echo "Please install a system (non-Snap) Node.js 20+ and npm, then"
+        echo "rerun this updater. For example, on Debian/Ubuntu:"
+        echo
+        echo "  sudo apt update"
+        echo "  sudo apt install nodejs npm"
+        echo
+        echo "The existing Node Snap does not need to be removed; the system"
+        echo "packages can coexist with it. If both are installed, ensure the"
+        echo "non-Snap node/npm come first in PATH."
+        exit 1
+        ;;
+esac
+
+# Enforce the Node.js 20+ requirement
+NODE_VERSION=$(node --version 2>/dev/null | sed 's/^v//')
+NODE_MAJOR=$(echo "$NODE_VERSION" | cut -d. -f1)
+
+case "$NODE_MAJOR" in
+    ''|*[!0-9]*)
+        echo -e "${RED}Error: Unable to determine the Node.js version${NC}"
+        echo "Please install Node.js v20 or newer and try again"
+        exit 1
+        ;;
+esac
+
+if [ "$NODE_MAJOR" -lt 20 ]; then
+    echo -e "${RED}Error: Node.js 20+ is required (found ${NODE_VERSION})${NC}"
+    echo "Please install Node.js v20 or newer and try again"
+    exit 1
+fi
+
+echo -e "${GREEN}✓${NC} Node.js $(node --version) found"
+echo -e "${GREEN}✓${NC} npm $(npm --version) found"
+
+
 # Check if service is running
 SERVICE_WAS_RUNNING=false
 if systemctl is-active --quiet webzfs 2>/dev/null; then
@@ -85,6 +159,56 @@ rsync -a --exclude='.venv' --exclude='node_modules' --exclude='.git' --exclude='
 chown -R "$WEBZFS_USER:$WEBZFS_USER" "$INSTALL_DIR"
 
 echo -e "${GREEN}✓${NC} Application files updated"
+echo
+
+# Pre-create JSON data files that newer versions introduced.
+#
+# FileStorageService and SMARTMonitoringService create these on first
+# import if missing, but several Gunicorn workers import at the same
+# moment during a restart and can race each other writing the same new
+# file. Creating them here, before the service is restarted, means the
+# workers only ever read files that already exist. This mirrors the same
+# block in install_linux.sh and is why an update must touch data files
+# at all.
+DATA_DIR="${INSTALL_DIR}/.config/webzfs"
+mkdir -p "${DATA_DIR}/progress"
+mkdir -p "${DATA_DIR}/logs"
+
+if [ ! -f "${DATA_DIR}/replication_history.json" ]; then
+    echo '{"executions": [], "next_id": 1}' > "${DATA_DIR}/replication_history.json"
+fi
+if [ ! -f "${DATA_DIR}/notification_log.json" ]; then
+    echo '{"notifications": []}' > "${DATA_DIR}/notification_log.json"
+fi
+if [ ! -f "${DATA_DIR}/syncoid_jobs.json" ]; then
+    echo '{"jobs": [], "next_id": 1}' > "${DATA_DIR}/syncoid_jobs.json"
+fi
+if [ ! -f "${DATA_DIR}/scrub_schedules.json" ]; then
+    echo '{"schedules": [], "next_id": 1}' > "${DATA_DIR}/scrub_schedules.json"
+fi
+if [ ! -f "${DATA_DIR}/smart_test_history.json" ]; then
+    echo '{"history": []}' > "${DATA_DIR}/smart_test_history.json"
+fi
+if [ ! -f "${DATA_DIR}/smart_scheduled_tests.json" ]; then
+    echo '{}' > "${DATA_DIR}/smart_scheduled_tests.json"
+fi
+if [ ! -f "${DATA_DIR}/health_reports.json" ]; then
+    echo '{"reports": []}' > "${DATA_DIR}/health_reports.json"
+fi
+if [ ! -f "${DATA_DIR}/health_schedules.json" ]; then
+    echo '{"schedules": [], "next_id": 1}' > "${DATA_DIR}/health_schedules.json"
+fi
+
+chown -R "$WEBZFS_USER:$WEBZFS_USER" "$DATA_DIR"
+
+# Remove stale scheduled-task lock files created by older releases that
+# ran the task runner as root (issue #194). The /tmp sticky bit prevents
+# the webzfs account from deleting them itself, and a root-owned 0644
+# lock cannot be opened for append by webzfs. The runner recreates them
+# with webzfs ownership on the next run.
+rm -f /tmp/webzfs-task-*.lock
+
+echo -e "${GREEN}✓${NC} Data files verified"
 echo
 
 # Refresh sudo permissions so new privileged commands (for example grep and
@@ -118,6 +242,22 @@ webzfs ALL=(ALL) NOPASSWD: /usr/bin/systemctl, /bin/systemctl
 
 # Crontab editing
 webzfs ALL=(ALL) NOPASSWD: /usr/bin/crontab
+
+# Scheduled syncoid job timers.
+# Unit files are created and edited with "sudo tee" (covered by the
+# general tee entry below) and enabled/disabled/reloaded with
+# "sudo systemctl" (covered by the systemctl entry above). The explicit
+# tee entries here document that intent and keep timer management
+# working even if the general tee entry is ever narrowed. rm is
+# restricted to WebZFS-owned unit files only.
+webzfs ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/webzfs-syncoid-job-*, /bin/tee /etc/systemd/system/webzfs-syncoid-job-*
+webzfs ALL=(ALL) NOPASSWD: /usr/bin/rm -f /etc/systemd/system/webzfs-syncoid-job-*, /bin/rm -f /etc/systemd/system/webzfs-syncoid-job-*
+
+# Unified Scheduling Hub timers. All scheduled task types (scrub, SMART
+# self-test, health check, and replication) use the webzfs-task-* unit
+# naming scheme managed by services/job_scheduler.py.
+webzfs ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/webzfs-task-*, /bin/tee /etc/systemd/system/webzfs-task-*
+webzfs ALL=(ALL) NOPASSWD: /usr/bin/rm -f /etc/systemd/system/webzfs-task-*, /bin/rm -f /etc/systemd/system/webzfs-task-*
 
 # File editing (for config files like smartd.conf, sanoid.conf)
 webzfs ALL=(ALL) NOPASSWD: /usr/bin/cat, /usr/bin/tee, /usr/bin/mkdir

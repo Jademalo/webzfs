@@ -2,6 +2,7 @@
 ZFS Dataset Management Service
 Handles dataset operations: create, destroy, list, clone, properties, etc.
 """
+import os
 import re
 import subprocess
 from typing import List, Dict, Any, Optional
@@ -145,6 +146,43 @@ class ZFSDatasetService:
             
         except subprocess.CalledProcessError as e:
             raise Exception(f"Failed to list datasets: {e.stderr}")
+    
+    # zfs send -L is required when any block exceeds 128 KiB
+    LARGE_BLOCK_THRESHOLD_BYTES = 131072
+    
+    def get_large_block_status(self, dataset_name: str) -> Dict[str, Any]:
+        """
+        Check whether a dataset uses blocks larger than 128 KiB.
+        
+        Reads recordsize (filesystems) and volblocksize (volumes) in
+        parseable byte form. Datasets over 128 KiB require zfs send -L
+        (large blocks) to replicate (issue #204).
+        
+        Args:
+            dataset_name: Full name of the dataset
+            
+        Returns:
+            Dictionary with large_blocks flag and the block size in bytes
+        """
+        self.validate_dataset_name(dataset_name)
+        result = run_zfs_command([
+            'zfs', 'get', '-H', '-p', '-o', 'property,value',
+            'recordsize,volblocksize', dataset_name
+        ])
+        
+        block_size_bytes = 0
+        for line in result.stdout.strip().split('\n'):
+            if not line:
+                continue
+            parts = line.split('\t')
+            if len(parts) >= 2 and parts[1].isdigit():
+                block_size_bytes = max(block_size_bytes, int(parts[1]))
+        
+        return {
+            'dataset': dataset_name,
+            'block_size_bytes': block_size_bytes,
+            'large_blocks': block_size_bytes > self.LARGE_BLOCK_THRESHOLD_BYTES
+        }
     
     def get_dataset(self, dataset_name: str) -> Dict[str, Any]:
         """
@@ -738,3 +776,138 @@ class ZFSDatasetService:
             
         except subprocess.CalledProcessError as e:
             raise Exception(f"Failed to change encryption key: {e.stderr}")
+    
+    # Maximum number of directory entries returned by peek_directory
+    PEEK_MAX_ENTRIES = 1000
+    
+    def peek_directory(self, dataset_name: str, subpath: str = "") -> Dict[str, Any]:
+        """
+        List the contents of a directory inside a mounted dataset.
+        
+        Traversal is restricted to the dataset mountpoint. The requested
+        subpath is resolved with realpath and rejected if it escapes the
+        mountpoint (blocks ../ traversal and symlink escapes).
+        
+        Args:
+            dataset_name: Name of the dataset
+            subpath: Relative path inside the dataset (empty for the root)
+            
+        Returns:
+            Dictionary with mountpoint, subpath, breadcrumb segments,
+            entries (folders first, then files), truncated flag and an
+            optional error message.
+        """
+        self.validate_dataset_name(dataset_name)
+        
+        result: Dict[str, Any] = {
+            'dataset': dataset_name,
+            'mountpoint': None,
+            'subpath': '',
+            'breadcrumbs': [],
+            'entries': [],
+            'truncated': False,
+            'error': None,
+        }
+        
+        # Resolve mountpoint and verify the dataset is a mounted filesystem
+        try:
+            zfs_result = run_zfs_command(
+                ['zfs', 'get', '-H', '-o', 'property,value',
+                 'type,mounted,mountpoint', dataset_name]
+            )
+        except subprocess.CalledProcessError as e:
+            result['error'] = f"Failed to query dataset: {e.stderr}"
+            return result
+        
+        props = {}
+        for line in zfs_result.stdout.strip().split('\n'):
+            parts = line.split('\t')
+            if len(parts) >= 2:
+                props[parts[0]] = parts[1]
+        
+        if props.get('type') != 'filesystem':
+            result['error'] = "Peek is only available for filesystem datasets"
+            return result
+        if props.get('mounted') != 'yes':
+            result['error'] = "Dataset is not mounted"
+            return result
+        
+        mountpoint = props.get('mountpoint', '')
+        if not mountpoint or mountpoint in ('-', 'none', 'legacy'):
+            result['error'] = "Dataset has no usable mountpoint"
+            return result
+        
+        mountpoint_real = os.path.realpath(mountpoint)
+        result['mountpoint'] = mountpoint
+        
+        # Sanitize and resolve the requested subpath within the mountpoint
+        clean_subpath = subpath.strip().strip('/')
+        target_dir = os.path.realpath(os.path.join(mountpoint_real, clean_subpath)) if clean_subpath else mountpoint_real
+        
+        # Enforce the dataset boundary: the resolved path must stay inside
+        # the mountpoint. This blocks ../ traversal and symlink escapes.
+        if target_dir != mountpoint_real and not target_dir.startswith(mountpoint_real + os.sep):
+            result['error'] = "Path is outside the dataset mountpoint"
+            return result
+        
+        # Recompute the effective subpath from the resolved location so the
+        # breadcrumb always reflects the real position inside the dataset
+        effective_subpath = os.path.relpath(target_dir, mountpoint_real)
+        if effective_subpath == '.':
+            effective_subpath = ''
+        result['subpath'] = effective_subpath
+        
+        # Build breadcrumb segments with cumulative paths
+        if effective_subpath:
+            cumulative = []
+            for segment in effective_subpath.split(os.sep):
+                cumulative.append(segment)
+                result['breadcrumbs'].append({
+                    'name': segment,
+                    'subpath': '/'.join(cumulative),
+                })
+        
+        if not os.path.isdir(target_dir):
+            result['error'] = "Directory does not exist"
+            return result
+        
+        # List directory entries
+        folders = []
+        files = []
+        try:
+            with os.scandir(target_dir) as scan:
+                for entry in scan:
+                    if len(folders) + len(files) >= self.PEEK_MAX_ENTRIES:
+                        result['truncated'] = True
+                        break
+                    try:
+                        is_dir = entry.is_dir(follow_symlinks=False)
+                    except OSError:
+                        is_dir = False
+                    item = {
+                        'name': entry.name,
+                        'is_dir': is_dir,
+                        'is_hidden': entry.name.startswith('.'),
+                        'size': None,
+                    }
+                    if not is_dir:
+                        try:
+                            item['size'] = entry.stat(follow_symlinks=False).st_size
+                        except OSError:
+                            pass
+                    if is_dir:
+                        folders.append(item)
+                    else:
+                        files.append(item)
+        except PermissionError:
+            result['error'] = "Permission denied reading this directory"
+            return result
+        except OSError as e:
+            result['error'] = f"Failed to read directory: {e}"
+            return result
+        
+        folders.sort(key=lambda x: x['name'].lower())
+        files.sort(key=lambda x: x['name'].lower())
+        result['entries'] = folders + files
+        
+        return result

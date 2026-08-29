@@ -128,15 +128,12 @@
                         {% for execution in history %}
                         <tr class="hover:bg-bg-elevated-2 transition-colors">
                             <td class="px-3 py-3 font-mono text-sm">#{{ execution.id }}</td>
+                            <!-- The native job detail page was removed with
+                                 the native job scheduler, so the job name is
+                                 plain text. Execution detail is still linked
+                                 from the Actions column. -->
                             <td class="px-3 py-3 font-medium">
-                                {% if execution.job_id %}
-                                    <a href="/zfs/replication/jobs/{{ execution.job_id }}/detail" 
-                                       class="text-primary-400 hover:text-primary-300">
-                                        {{ execution.job_name }}
-                                    </a>
-                                {% else %}
-                                    {{ execution.job_name }}
-                                {% endif %}
+                                {{ execution.job_name }}
                             </td>
                             <td class="px-3 py-3 font-mono text-sm">
                                 <span class="text-primary-400">{{ execution.source_dataset }}</span>

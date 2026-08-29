@@ -111,6 +111,56 @@ echo "Updating application files from $SOURCE_DIR to $INSTALL_DIR..."
 printf "${GREEN}✓${NC} Application files updated\n"
 echo
 
+# Pre-create JSON data files that newer versions introduced.
+#
+# FileStorageService and SMARTMonitoringService create these on first
+# import if missing, but several Gunicorn workers import at the same
+# moment during a restart and can race each other writing the same new
+# file. Creating them here, before the service is restarted, means the
+# workers only ever read files that already exist. This mirrors the same
+# block in install_netbsd.sh.
+DATA_DIR="${INSTALL_DIR}/.config/webzfs"
+mkdir -p "${DATA_DIR}/progress"
+mkdir -p "${DATA_DIR}/logs"
+
+# Storage service files
+if [ ! -f "${DATA_DIR}/replication_history.json" ]; then
+    echo '{"executions": [], "next_id": 1}' > "${DATA_DIR}/replication_history.json"
+fi
+if [ ! -f "${DATA_DIR}/notification_log.json" ]; then
+    echo '{"notifications": []}' > "${DATA_DIR}/notification_log.json"
+fi
+if [ ! -f "${DATA_DIR}/syncoid_jobs.json" ]; then
+    echo '{"jobs": [], "next_id": 1}' > "${DATA_DIR}/syncoid_jobs.json"
+fi
+if [ ! -f "${DATA_DIR}/scrub_schedules.json" ]; then
+    echo '{"schedules": [], "next_id": 1}' > "${DATA_DIR}/scrub_schedules.json"
+fi
+
+# SMART monitoring service files
+if [ ! -f "${DATA_DIR}/smart_test_history.json" ]; then
+    echo '{"history": []}' > "${DATA_DIR}/smart_test_history.json"
+fi
+if [ ! -f "${DATA_DIR}/smart_scheduled_tests.json" ]; then
+    echo '{}' > "${DATA_DIR}/smart_scheduled_tests.json"
+fi
+
+# Health analysis service files
+if [ ! -f "${DATA_DIR}/health_reports.json" ]; then
+    echo '{"reports": []}' > "${DATA_DIR}/health_reports.json"
+fi
+if [ ! -f "${DATA_DIR}/health_schedules.json" ]; then
+    echo '{"schedules": [], "next_id": 1}' > "${DATA_DIR}/health_schedules.json"
+fi
+
+# /root/.config/webzfs is deliberately not seeded. WebZFS runs as root
+# here, but the rc.d wrapper, run.sh, and the scheduled task crontab
+# entries all export HOME=/opt/webzfs, so the files above are the ones
+# actually read.
+
+printf "${GREEN}✓${NC} Data files verified\n"
+echo
+
 # Update CAPTION in .env from .env.example
 ENV_FILE="${INSTALL_DIR}/.env"
 if [ -f "$ENV_FILE" ]; then

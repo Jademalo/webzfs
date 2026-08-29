@@ -5,6 +5,7 @@ Provides web interface for ZFS replication operations using native send/receive 
 from fastapi import APIRouter, Request, Form, Depends, Body
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response
 from typing import Annotated, Optional, Dict
+import json
 import platform
 import threading
 from config.templates import templates
@@ -13,6 +14,15 @@ from services.syncoid import SyncoidService
 from services.zfs_dataset import ZFSDatasetService
 from services.zfs_snapshot import ZFSSnapshotService
 from services.ssh_connection import SSHConnectionService
+from services.storage import FileStorageService
+from services.job_scheduler import SyncoidJobScheduler
+from services.schedule_utils import (
+    validate_cron_expression,
+    calculate_next_run,
+    get_schedule_presets,
+    describe_schedule,
+    preview_next_runs,
+)
 from services.utils import get_openzfs_man_page_section_url, get_os_type, get_zfs_version
 from auth.dependencies import get_current_user
 
@@ -23,15 +33,23 @@ syncoid_service = SyncoidService()
 dataset_service = ZFSDatasetService()
 snapshot_service = ZFSSnapshotService()
 ssh_service = SSHConnectionService()
+storage_service = FileStorageService()
+job_scheduler = SyncoidJobScheduler()
 
 
 @router.get("/", response_class=HTMLResponse)
 async def replication_index(request: Request):
-    """Display replication management dashboard"""
+    """Display replication management dashboard.
+
+    Scheduled jobs shown here are Syncoid jobs. The former native
+    send/receive job scheduler was removed: its job records lived only in
+    process memory, so they were lost on restart and never executed on
+    their schedule. One-off native replication is still available through
+    ZFS Send/Receive, and all scheduling now goes through Syncoid.
+    """
     try:
-        # Get replication jobs
-        jobs = replication_service.list_replication_jobs()
-        
+        scheduled_jobs = _annotate_jobs(storage_service.get_syncoid_jobs())
+
         # Check syncoid status
         syncoid_status = syncoid_service.check_syncoid_status()
 
@@ -45,7 +63,7 @@ async def replication_index(request: Request):
             request,
             name="zfs/replication/index.jinja",
             context={
-                "jobs": jobs,
+                "scheduled_jobs": scheduled_jobs,
                 "syncoid_status": syncoid_status,
                 "active_executions": active_executions,
                 "system": system,
@@ -57,7 +75,7 @@ async def replication_index(request: Request):
             request,
             name="zfs/replication/index.jinja",
             context={
-                "jobs": [],
+                "scheduled_jobs": [],
                 "syncoid_status": {'installed': False},
                 "active_executions": [],
                 "system": platform.system(),
@@ -67,205 +85,24 @@ async def replication_index(request: Request):
         )
 
 
-@router.get("/jobs/create/form", response_class=HTMLResponse)
-async def create_job_form(request: Request):
-    """Display create replication job form"""
-    try:
-        # Get available datasets
-        datasets = dataset_service.list_datasets()
-        ssh_connections = ssh_service.list_connections()
-        
-        return templates.TemplateResponse(
-            request,
-            name="zfs/replication/job_create.jinja",
-            context={
-                "datasets": datasets,
-                "ssh_connections": ssh_connections,
-                "replication_types": [t.value for t in ReplicationType],
-                "compression_methods": [c.value for c in CompressionMethod],
-                "page_title": "Create Replication Job"
-            }
-        )
-    except Exception as e:
-        return templates.TemplateResponse(
-            request,
-            name="zfs/replication/job_create.jinja",
-            context={
-                "datasets": [],
-                "ssh_connections": [],
-                "error": str(e),
-                "page_title": "Create Replication Job"
-            }
-        )
+# The native replication job routes that used to live here were removed
+# along with the native job scheduler. Scheduling is handled by the
+# Scheduled Syncoid Jobs routes further down this file, and one-off
+# native transfers by the Send/Receive routes below. Any bookmarked
+# /zfs/replication/jobs/... URL now lands on the redirect below.
 
 
-@router.post("/jobs/create", response_class=HTMLResponse)
-async def create_job(
-    request: Request,
-    name: Annotated[str, Form()],
-    source_dataset: Annotated[str, Form()],
-    target_dataset: Annotated[str, Form()],
-    replication_type: Annotated[str, Form()],
-    schedule: Annotated[str, Form()],
-    enabled: Annotated[bool, Form()] = True,
-    recursive: Annotated[bool, Form()] = False,
-    compression: Annotated[str, Form()] = "lz4",
-    remote_host: Annotated[str, Form()] = "",
-    remote_port: Annotated[int, Form()] = 22,
-    ssh_key: Annotated[str, Form()] = "",
-    ssh_connection_id: Annotated[str, Form()] = ""
-):
-    """Create a new replication job"""
-    try:
-        options = {}
-        if remote_host:
-            options['remote_host'] = remote_host
-            options['remote_port'] = remote_port
-        if ssh_key:
-            options['ssh_key'] = ssh_key
-
-        # Resolve the SSH Manager connection to get the private key path
-        # and remote host details for key-based authentication.
-        if ssh_connection_id:
-            connection = ssh_service.get_connection(ssh_connection_id)
-            if connection:
-                options['ssh_key'] = connection['private_key_path']
-                if not remote_host:
-                    options['remote_host'] = f"{connection['username']}@{connection['host']}"
-                    options['remote_port'] = connection['port']
-        
-        job_id = replication_service.create_replication_job(
-            name=name,
-            source_dataset=source_dataset,
-            target_dataset=target_dataset,
-            replication_type=ReplicationType(replication_type),
-            schedule=schedule,
-            enabled=enabled,
-            recursive=recursive,
-            compression=CompressionMethod(compression),
-            **options
-        )
-        
-        return RedirectResponse(
-            url=f"/zfs/replication?message=Replication job '{name}' created successfully",
-            status_code=303
-        )
-    except Exception as e:
-        datasets = dataset_service.list_datasets()
-        ssh_connections = ssh_service.list_connections()
-        return templates.TemplateResponse(
-            request,
-            name="zfs/replication/job_create.jinja",
-            context={
-                "datasets": datasets,
-                "ssh_connections": ssh_connections,
-                "replication_types": [t.value for t in ReplicationType],
-                "compression_methods": [c.value for c in CompressionMethod],
-                "error": str(e),
-                "page_title": "Create Replication Job"
-            }
-        )
-
-
-@router.get("/jobs/{job_id}/detail", response_class=HTMLResponse)
-async def job_detail(request: Request, job_id: str):
-    """Display replication job details"""
-    try:
-        job = replication_service.get_replication_job(job_id)
-        status = replication_service.get_replication_status(job_id)
-        history = replication_service.get_replication_history(job_id=job_id, limit=20)
-        
-        return templates.TemplateResponse(
-            request,
-            name="zfs/replication/job_detail.jinja",
-            context={
-                "job": job,
-                "status": status,
-                "history": history,
-                "page_title": f"Replication Job: {job['name']}"
-            }
-        )
-    except Exception as e:
-        return templates.TemplateResponse(
-            request,
-            name="partials/error.jinja",
-            context={
-                "error": str(e),
-                "back_url": "/zfs/replication"
-            }
-        )
-
-
-@router.post("/jobs/{job_id}/enable", response_class=HTMLResponse)
-async def enable_job(request: Request, job_id: str):
-    """Enable a replication job"""
-    try:
-        replication_service.enable_job(job_id)
-        return RedirectResponse(
-            url=f"/zfs/replication/jobs/{job_id}/detail?message=Job enabled",
-            status_code=303
-        )
-    except Exception as e:
-        return RedirectResponse(
-            url=f"/zfs/replication/jobs/{job_id}/detail?error={str(e)}",
-            status_code=303
-        )
-
-
-@router.post("/jobs/{job_id}/disable", response_class=HTMLResponse)
-async def disable_job(request: Request, job_id: str):
-    """Disable a replication job"""
-    try:
-        replication_service.disable_job(job_id)
-        return RedirectResponse(
-            url=f"/zfs/replication/jobs/{job_id}/detail?message=Job disabled",
-            status_code=303
-        )
-    except Exception as e:
-        return RedirectResponse(
-            url=f"/zfs/replication/jobs/{job_id}/detail?error={str(e)}",
-            status_code=303
-        )
-
-
-@router.get("/jobs/{job_id}/delete/confirm", response_class=HTMLResponse)
-async def delete_job_confirm(request: Request, job_id: str):
-    """Display delete confirmation page"""
-    try:
-        job = replication_service.get_replication_job(job_id)
-        return templates.TemplateResponse(
-            request,
-            name="zfs/replication/job_delete_confirm.jinja",
-            context={
-                "job": job,
-                "page_title": f"Delete Replication Job: {job['name']}"
-            }
-        )
-    except Exception as e:
-        return templates.TemplateResponse(
-            request,
-            name="partials/error.jinja",
-            context={
-                "error": str(e),
-                "back_url": "/zfs/replication"
-            }
-        )
-
-
-@router.post("/jobs/{job_id}/delete", response_class=HTMLResponse)
-async def delete_job(request: Request, job_id: str):
-    """Delete a replication job"""
-    try:
-        replication_service.delete_replication_job(job_id)
-        return RedirectResponse(
-            url="/zfs/replication?message=Replication job deleted",
-            status_code=303
-        )
-    except Exception as e:
-        return RedirectResponse(
-            url=f"/zfs/replication/jobs/{job_id}/detail?error={str(e)}",
-            status_code=303
-        )
+@router.get("/jobs/{rest_of_path:path}")
+async def native_jobs_redirect(request: Request, rest_of_path: str):
+    """Send old native job URLs to the Syncoid scheduled job list."""
+    return RedirectResponse(
+        url=(
+            "/zfs/replication/syncoid?message="
+            "Native replication job scheduling was replaced by "
+            "scheduled Syncoid jobs"
+        ),
+        status_code=303,
+    )
 
 
 # Native ZFS Send/Receive Operations
@@ -320,6 +157,7 @@ async def send_receive_execute(
     incremental: Annotated[bool, Form()] = False,
     recursive: Annotated[bool, Form()] = False,
     raw: Annotated[bool, Form()] = False,
+    large_blocks: Annotated[bool, Form()] = False,
     compression: Annotated[str, Form()] = "lz4",
     remote_host: Annotated[str, Form()] = "",
     remote_port: Annotated[int, Form()] = 22,
@@ -364,6 +202,7 @@ async def send_receive_execute(
                 'incremental': incremental,
                 'recursive': recursive,
                 'raw': raw,
+                'large_blocks': large_blocks,
                 'compression': comp_method,
                 'job_name': job_name,
                 **options
@@ -434,8 +273,8 @@ async def syncoid_index(request: Request):
     """Display syncoid operations dashboard"""
     try:
         syncoid_status = syncoid_service.check_syncoid_status()
-        datasets = dataset_service.list_datasets()
         ssh_connections = ssh_service.list_connections()
+        scheduled_jobs = _annotate_jobs(storage_service.get_syncoid_jobs())
         
         # Detect OS
         system = platform.system()
@@ -445,8 +284,8 @@ async def syncoid_index(request: Request):
             name="zfs/replication/syncoid.jinja",
             context={
                 "syncoid_status": syncoid_status,
-                "datasets": datasets,
                 "ssh_connections": ssh_connections,
+                "scheduled_jobs": scheduled_jobs,
                 "system": system,
                 "page_title": "Syncoid Replication"
             }
@@ -457,173 +296,11 @@ async def syncoid_index(request: Request):
             name="zfs/replication/syncoid.jinja",
             context={
                 "syncoid_status": {'installed': False},
-                "datasets": [],
                 "ssh_connections": [],
+                "scheduled_jobs": [],
                 "system": platform.system(),
                 "error": str(e),
                 "page_title": "Syncoid Replication"
-            }
-        )
-
-
-@router.post("/syncoid/execute", response_class=HTMLResponse)
-async def syncoid_execute(
-    request: Request,
-    source: Annotated[str, Form()],
-    target: Annotated[str, Form()],
-    recursive: Annotated[bool, Form()] = False,
-    no_sync_snap: Annotated[bool, Form()] = False,
-    compress: Annotated[str, Form()] = "",
-    source_bwlimit: Annotated[str, Form()] = "",
-    target_bwlimit: Annotated[str, Form()] = "",
-    skip_parent: Annotated[bool, Form()] = False,
-    create_bookmark: Annotated[bool, Form()] = False,
-    force_delete: Annotated[bool, Form()] = False,
-    source_ssh_connection_id: Annotated[str, Form()] = "",
-    target_ssh_connection_id: Annotated[str, Form()] = "",
-    dry_run: Annotated[bool, Form()] = False
-):
-    """Execute syncoid replication.
-
-    Remote endpoints are resolved server side from the selected SSH
-    Manager connection IDs. The managed connection record is the single
-    source of truth for username, host, port, and private key, so the
-    browser cannot override the SSH destination or identity (issue #195).
-    """
-    try:
-        # Syncoid supports one global --sshkey and --sshport per command.
-        # Two different remote connections cannot be represented, so
-        # reject that topology explicitly instead of silently using one
-        # side's key for both.
-        if (
-            source_ssh_connection_id
-            and target_ssh_connection_id
-            and source_ssh_connection_id != target_ssh_connection_id
-        ):
-            raise Exception(
-                "Remote-to-remote replication between two different SSH "
-                "connections is not supported yet. One side must be Local, "
-                "or both sides must use the same SSH connection."
-            )
-
-        # Resolve the managed connection (if any) into an SSH profile
-        # containing user@host, port, key path, and strict host key options.
-        ssh_profile = None
-        active_connection_id = source_ssh_connection_id or target_ssh_connection_id
-        if active_connection_id:
-            ssh_profile = ssh_service.build_syncoid_profile(active_connection_id)
-            ssh_service.mark_connection_used(active_connection_id, 'replication')
-
-        source_host = ssh_profile['host_string'] if source_ssh_connection_id else None
-        target_host = ssh_profile['host_string'] if target_ssh_connection_id else None
-
-        result = syncoid_service.execute_replication(
-            source=source,
-            target=target,
-            recursive=recursive,
-            no_sync_snap=no_sync_snap,
-            compress=compress if compress else None,
-            source_bwlimit=source_bwlimit if source_bwlimit else None,
-            target_bwlimit=target_bwlimit if target_bwlimit else None,
-            skip_parent=skip_parent,
-            create_bookmark=create_bookmark,
-            force_delete=force_delete,
-            source_host=source_host,
-            target_host=target_host,
-            ssh_port=ssh_profile['port'] if ssh_profile and ssh_profile['port'] != 22 else None,
-            ssh_key=ssh_profile['identity_file'] if ssh_profile else None,
-            ssh_options=ssh_profile['ssh_options'] if ssh_profile else None,
-            dry_run=dry_run
-        )
-        
-        return templates.TemplateResponse(
-            request,
-            name="zfs/replication/syncoid_result.jinja",
-            context={
-                "result": result,
-                "page_title": "Syncoid Result"
-            }
-        )
-    except Exception as e:
-        syncoid_status = syncoid_service.check_syncoid_status()
-        datasets = dataset_service.list_datasets()
-        return templates.TemplateResponse(
-            request,
-            name="zfs/replication/syncoid.jinja",
-            context={
-                "syncoid_status": syncoid_status,
-                "datasets": datasets,
-                "error": str(e),
-                "page_title": "Syncoid Replication"
-            }
-        )
-
-
-@router.post("/syncoid/test-connection", response_class=HTMLResponse)
-async def syncoid_test_connection(
-    request: Request,
-    remote_host: Annotated[str, Form()],
-    remote_port: Annotated[int, Form()] = 22,
-    dataset: Annotated[str, Form()] = ""
-):
-    """Test SSH connection to remote host"""
-    try:
-        result = syncoid_service.test_connection(
-            remote_host=remote_host,
-            remote_port=remote_port,
-            dataset=dataset if dataset else None
-        )
-        
-        if result['status'] == 'success':
-            message = f"Connection to {remote_host} successful"
-        else:
-            message = f"Connection failed: {result['message']}"
-        
-        return RedirectResponse(
-            url=f"/zfs/replication/syncoid?message={message}",
-            status_code=303
-        )
-    except Exception as e:
-        return RedirectResponse(
-            url=f"/zfs/replication/syncoid?error={str(e)}",
-            status_code=303
-        )
-
-
-@router.post("/syncoid/common-snapshots", response_class=HTMLResponse)
-async def syncoid_common_snapshots(
-    request: Request,
-    source: Annotated[str, Form()],
-    target: Annotated[str, Form()],
-    source_host: Annotated[str, Form()] = "",
-    target_host: Annotated[str, Form()] = ""
-):
-    """Get common snapshots between source and target"""
-    try:
-        result = syncoid_service.get_common_snapshots(
-            source=source,
-            target=target,
-            source_host=source_host if source_host else None,
-            target_host=target_host if target_host else None
-        )
-        
-        return templates.TemplateResponse(
-            request,
-            name="zfs/replication/common_snapshots.jinja",
-            context={
-                "result": result,
-                "source": source,
-                "target": target,
-                "page_title": "Common Snapshots"
-            }
-        )
-    except Exception as e:
-        return templates.TemplateResponse(
-            request,
-            name="partials/error.jinja",
-            context={
-                "error": str(e),
-                "back_url": "/zfs/replication/syncoid"
             }
         )
 
@@ -728,34 +405,41 @@ async def get_ssh_connections():
         })
 
 
-@router.post("/api/get-remote-datasets")
-async def get_remote_datasets(data: Dict = Body(...)):
-    """API endpoint to get datasets from a remote system via SSH connection"""
+@router.post("/api/check-large-blocks")
+async def check_large_blocks(data: Dict = Body(...)):
+    """API endpoint that reports whether a dataset needs zfs send -L.
+
+    Checks recordsize (filesystems) and volblocksize (volumes). Values
+    above 128 KiB require the large-block send flag (issue #204). The
+    replication forms call this when a source dataset is selected so
+    the Large blocks checkbox can be pre-checked automatically.
+
+    Accepts an optional ssh_connection_id to check datasets on a
+    remote system through the managed SSH connection.
+    """
     try:
         import subprocess
-        
-        ssh_connection_id = data.get('ssh_connection_id')
-        
-        if not ssh_connection_id:
-            # Return local datasets
-            local_datasets = dataset_service.list_datasets()
-            return JSONResponse({
-                "success": True,
-                "datasets": [ds['name'] for ds in local_datasets],
-                "message": "Local datasets loaded",
-                "is_local": True
-            })
-        
-        # Get the SSH connection
-        connection = ssh_service.get_connection(ssh_connection_id)
-        if not connection:
+
+        dataset = (data.get('dataset') or '').strip()
+        if not dataset:
             return JSONResponse({
                 "success": False,
-                "error": "SSH connection not found"
+                "error": "Dataset name is required"
             })
-        
-        # Get list of datasets from remote using key-based authentication
-        try:
+
+        # Snapshots inherit block size from their dataset
+        dataset = dataset.split('@')[0]
+
+        ssh_connection_id = data.get('ssh_connection_id')
+        if ssh_connection_id:
+            connection = ssh_service.get_connection(ssh_connection_id)
+            if not connection:
+                return JSONResponse({
+                    "success": False,
+                    "error": "SSH connection not found"
+                })
+            # Validate the name locally before it is sent to a shell
+            dataset_service.validate_dataset_name(dataset)
             ssh_service.ensure_host_key_trusted(connection['host'], connection['port'])
             ssh_cmd = [
                 'ssh',
@@ -768,38 +452,32 @@ async def get_remote_datasets(data: Dict = Body(...)):
                 ssh_cmd.extend(['-o', ssh_option])
             ssh_cmd.extend([
                 f"{connection['username']}@{connection['host']}",
-                'zfs', 'list', '-H', '-o', 'name'
+                'zfs', 'get', '-H', '-p', '-o', 'property,value',
+                'recordsize,volblocksize', dataset
             ])
-            
             process = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=30)
-            
-            if process.returncode == 0:
-                datasets = [line.strip() for line in process.stdout.strip().split('\n') if line.strip()]
-                
-                return JSONResponse({
-                    "success": True,
-                    "datasets": datasets,
-                    "message": f"Loaded {len(datasets)} datasets from {connection['name']}",
-                    "is_local": False,
-                    "connection_name": connection['name']
-                })
-            else:
-                error_msg = process.stderr if process.stderr else "Connection failed"
+            if process.returncode != 0:
                 return JSONResponse({
                     "success": False,
-                    "error": f"Failed to get datasets: {error_msg}"
+                    "error": process.stderr or "Failed to read block size"
                 })
-        except subprocess.TimeoutExpired:
+            block_size_bytes = 0
+            for line in process.stdout.strip().split('\n'):
+                parts = line.split('\t')
+                if len(parts) >= 2 and parts[1].isdigit():
+                    block_size_bytes = max(block_size_bytes, int(parts[1]))
             return JSONResponse({
-                "success": False,
-                "error": "Connection timeout (30 seconds)"
+                "success": True,
+                "dataset": dataset,
+                "block_size_bytes": block_size_bytes,
+                "large_blocks": block_size_bytes > dataset_service.LARGE_BLOCK_THRESHOLD_BYTES
             })
-        except Exception as e:
-            return JSONResponse({
-                "success": False,
-                "error": f"Failed to fetch datasets: {str(e)}"
-            })
-            
+
+        status = dataset_service.get_large_block_status(dataset)
+        return JSONResponse({
+            "success": True,
+            **status
+        })
     except Exception as e:
         return JSONResponse({
             "success": False,
@@ -1056,62 +734,53 @@ async def execution_error_log(request: Request, execution_id: int):
     )
 
 
-@router.get("/api/progress-stream")
-async def progress_stream(request: Request):
-    """Server-Sent Events endpoint for real-time progress monitoring"""
-    from fastapi.responses import StreamingResponse
-    import asyncio
-    
-    async def event_generator():
-        """Generate SSE events for active replication progress"""
-        try:
-            while True:
-                # Check if client disconnected
-                if await request.is_disconnected():
-                    break
-                
-                # Get active executions
-                active = replication_service.get_active_executions()
-                
-                if active:
-                    # Send progress updates for each active execution
-                    for execution in active:
-                        # Get latest progress details
-                        detail = replication_service.get_execution_detail(execution['id'])
-                        if detail and detail.get('progress_updates'):
-                            latest_progress = detail['progress_updates'][-1]
-                            
-                            data = {
-                                'execution_id': execution['id'],
-                                'job_name': execution['job_name'],
-                                'percentage': latest_progress.get('percentage_complete', 0),
-                                'bytes_transferred': latest_progress.get('bytes_transferred', 0),
-                                'transfer_rate': latest_progress.get('transfer_rate', 'N/A'),
-                                'eta': latest_progress.get('estimated_time_remaining', 'N/A'),
-                                'status': latest_progress.get('status_message', '')
-                            }
-                            
-                            yield f"data: {json.dumps(data)}\n\n"
-                else:
-                    # Send keepalive
-                    yield f"data: {json.dumps({'keepalive': True})}\n\n"
-                
-                # Wait before next update (update every 2 seconds)
-                await asyncio.sleep(2)
-                
-        except Exception as e:
-            # Send error event
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
-    
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"  # Disable nginx buffering
+@router.get("/api/executions/{execution_id}/progress")
+async def execution_progress(execution_id: int):
+    """JSON endpoint polled by the execution detail page.
+
+    Returns the execution status and the latest progress update so
+    the Real-Time Progress panel can refresh without a page reload.
+    Polling is used instead of Server-Sent Events because it works
+    reliably across gunicorn workers, reverse proxies, and HTMX
+    boosted navigation.
+    """
+    try:
+        detail = replication_service.get_execution_detail(execution_id)
+        if not detail:
+            return JSONResponse({
+                "success": False,
+                "error": "Execution not found"
+            }, status_code=404)
+
+        progress_updates = detail.get('progress_updates') or []
+        latest_progress = progress_updates[-1] if progress_updates else None
+
+        response = {
+            "success": True,
+            "execution_id": execution_id,
+            "status": detail.get('status'),
+            "job_name": detail.get('job_name'),
+            "update_count": len(progress_updates),
         }
-    )
+
+        if latest_progress:
+            response["progress"] = {
+                "timestamp": latest_progress.get('timestamp'),
+                "percentage": latest_progress.get('percentage_complete', 0) or 0,
+                "bytes_transferred": latest_progress.get('bytes_transferred', 0) or 0,
+                "transfer_rate": latest_progress.get('transfer_rate') or 'N/A',
+                "eta": latest_progress.get('estimated_time_remaining') or 'N/A',
+                "status_message": latest_progress.get('status_message') or ''
+            }
+        else:
+            response["progress"] = None
+
+        return JSONResponse(response)
+    except Exception as e:
+        return JSONResponse({
+            "success": False,
+            "error": str(e)
+        }, status_code=500)
 
 
 @router.get("/notifications/settings", response_class=HTMLResponse)
@@ -1167,3 +836,369 @@ async def test_notifications(request: Request):
             url=f"/zfs/replication/notifications/settings?error={str(e)}",
             status_code=303
         )
+
+
+# Scheduled Syncoid Jobs (issue #194)
+
+def _annotate_jobs(jobs):
+    """Add display fields (connection name, schedule label, next run) to jobs."""
+    connections = {c['id']: c for c in ssh_service.list_connections()}
+    for job in jobs:
+        connection = connections.get(job.get('ssh_connection_id'))
+        job['connection_name'] = connection['name'] if connection else None
+        job['connection_missing'] = bool(
+            job.get('ssh_connection_id') and not connection
+        )
+        job['schedule_label'] = describe_schedule(job.get('schedule', ''))
+        if not job.get('next_run'):
+            job['next_run'] = calculate_next_run(job.get('schedule', ''))
+    return jobs
+
+
+def _validate_job_dataset(dataset_name: str, field_label: str) -> Optional[str]:
+    """Validate a Syncoid job dataset name.
+
+    Returns an error message string when the name is invalid, or None
+    when it is valid. Gives a specific hint when the user entered a
+    mountpoint path (leading slash) instead of a ZFS dataset name,
+    which ZFS rejects at receive time with "cannot receive: invalid
+    name".
+    """
+    if not dataset_name:
+        return f"{field_label} cannot be empty."
+    if dataset_name.startswith('/'):
+        return (
+            f"{field_label} '{dataset_name}' looks like a mountpoint path. "
+            "Enter the ZFS dataset name instead, for example 'zdata' or "
+            "'zdata/backups', without a leading slash."
+        )
+    try:
+        ZFSDatasetService.validate_dataset_name(dataset_name)
+    except ValueError as validation_error:
+        return f"{field_label}: {validation_error}"
+    return None
+
+
+def _list_local_dataset_names():
+    """Return local dataset names for the job form dropdowns.
+
+    Failures are non-fatal; the form falls back to free-text entry.
+    """
+    try:
+        return [d.get('name') for d in dataset_service.list_datasets() if d.get('name')]
+    except Exception:
+        return []
+
+
+def _parse_job_form_error(request: Request, error: str, job=None):
+    """Render the job form again with an error message."""
+    return templates.TemplateResponse(
+        request,
+        name="zfs/replication/syncoid_job_form.jinja",
+        context={
+            "job": job,
+            "ssh_connections": ssh_service.list_connections(),
+            "schedule_presets": get_schedule_presets(),
+            "local_datasets": _list_local_dataset_names(),
+            "error": error,
+            "page_title": "Scheduled Syncoid Job"
+        }
+    )
+
+
+@router.get("/syncoid/jobs/create/form", response_class=HTMLResponse)
+async def syncoid_job_create_form(request: Request):
+    """Display the create form for a scheduled Syncoid job"""
+    return templates.TemplateResponse(
+        request,
+        name="zfs/replication/syncoid_job_form.jinja",
+        context={
+            "job": None,
+            "ssh_connections": ssh_service.list_connections(),
+            "schedule_presets": get_schedule_presets(),
+            "local_datasets": _list_local_dataset_names(),
+            "page_title": "Create Scheduled Syncoid Job"
+        }
+    )
+
+
+@router.get("/syncoid/jobs/{job_id}/edit", response_class=HTMLResponse)
+async def syncoid_job_edit_form(request: Request, job_id: int):
+    """Display the edit form for a scheduled Syncoid job"""
+    job = storage_service.get_syncoid_job(job_id)
+    if not job:
+        return RedirectResponse(
+            url="/zfs/replication/syncoid?error=Scheduled job not found",
+            status_code=303
+        )
+    return templates.TemplateResponse(
+        request,
+        name="zfs/replication/syncoid_job_form.jinja",
+        context={
+            "job": job,
+            "ssh_connections": ssh_service.list_connections(),
+            "schedule_presets": get_schedule_presets(),
+            "local_datasets": _list_local_dataset_names(),
+            "page_title": f"Edit Scheduled Syncoid Job: {job['name']}"
+        }
+    )
+
+
+@router.post("/syncoid/jobs/save", response_class=HTMLResponse)
+async def syncoid_job_save(
+    request: Request,
+    name: Annotated[str, Form()],
+    source_dataset: Annotated[str, Form()],
+    target_dataset: Annotated[str, Form()],
+    schedule: Annotated[str, Form()],
+    target_new_child: Annotated[str, Form()] = "",
+    replication_type: Annotated[str, Form()] = "local",
+    ssh_connection_id: Annotated[str, Form()] = "",
+    job_id: Annotated[str, Form()] = "",
+    enabled: Annotated[bool, Form()] = False,
+    recursive: Annotated[bool, Form()] = False,
+    no_sync_snap: Annotated[bool, Form()] = False,
+    compress: Annotated[str, Form()] = "",
+    source_bwlimit: Annotated[str, Form()] = "",
+    target_bwlimit: Annotated[str, Form()] = "",
+    skip_parent: Annotated[bool, Form()] = False,
+    create_bookmark: Annotated[bool, Form()] = False,
+    force_delete: Annotated[bool, Form()] = False,
+    large_blocks: Annotated[bool, Form()] = False,
+):
+    """Create or update a scheduled Syncoid job and register it with
+    the OS scheduler (systemd timer on Linux, root crontab on BSD)."""
+    source_dataset = source_dataset.strip()
+    target_dataset = target_dataset.strip()
+    # Combine the target parent with the child dataset name server-side.
+    # Syncoid replicates into the exact dataset named as target, so the
+    # child (created on first replication) must be part of the stored
+    # name. Client-side combining proved unreliable, so it happens here.
+    target_new_child = target_new_child.strip().strip("/")
+    if target_new_child:
+        if target_dataset:
+            target_dataset = f"{target_dataset}/{target_new_child}"
+        else:
+            target_dataset = target_new_child
+    form_job = {
+        "id": int(job_id) if job_id else None,
+        "name": name,
+        "source_dataset": source_dataset,
+        "target_dataset": target_dataset,
+        "schedule": schedule,
+        "replication_type": replication_type,
+        "ssh_connection_id": ssh_connection_id or None,
+        "enabled": enabled,
+        "recursive": recursive,
+        "no_sync_snap": no_sync_snap,
+        "compress": compress or None,
+        "source_bwlimit": source_bwlimit or None,
+        "target_bwlimit": target_bwlimit or None,
+        "skip_parent": skip_parent,
+        "create_bookmark": create_bookmark,
+        "force_delete": force_delete,
+        "large_blocks": large_blocks,
+    }
+
+    try:
+        schedule = schedule.strip()
+        is_valid, schedule_error = validate_cron_expression(schedule)
+        if not is_valid:
+            return _parse_job_form_error(request, schedule_error, form_job)
+
+        # Validate dataset names before saving. Without this check a
+        # mountpoint path such as /zdata is accepted, and the job later
+        # fails at run time with "cannot receive: invalid name" buried
+        # in mbuffer broken pipe noise (see replication error reports).
+        dataset_error = _validate_job_dataset(source_dataset, "Source dataset")
+        if not dataset_error:
+            dataset_error = _validate_job_dataset(target_dataset, "Target dataset")
+        if dataset_error:
+            return _parse_job_form_error(request, dataset_error, form_job)
+
+        if replication_type in ("push", "pull") and not ssh_connection_id:
+            return _parse_job_form_error(
+                request,
+                "A SSH connection is required for push and pull jobs.",
+                form_job,
+            )
+        if replication_type == "local":
+            ssh_connection_id = ""
+
+        # Verify the referenced connection exists and is active
+        if ssh_connection_id:
+            connection = ssh_service.get_connection(ssh_connection_id)
+            if not connection:
+                return _parse_job_form_error(
+                    request, "Selected SSH connection was not found.", form_job
+                )
+
+        if job_id:
+            saved_id = int(job_id)
+            updated = storage_service.update_syncoid_job(
+                job_id=saved_id,
+                name=name,
+                source_dataset=source_dataset,
+                target_dataset=target_dataset,
+                schedule=schedule,
+                enabled=enabled,
+                recursive=recursive,
+                no_sync_snap=no_sync_snap,
+                compress=compress or "",
+                source_bwlimit=source_bwlimit or "",
+                target_bwlimit=target_bwlimit or "",
+                skip_parent=skip_parent,
+                create_bookmark=create_bookmark,
+                force_delete=force_delete,
+                large_blocks=large_blocks,
+                ssh_connection_id=ssh_connection_id,
+                replication_type=replication_type,
+            )
+            if not updated:
+                return _parse_job_form_error(
+                    request, "Scheduled job not found.", form_job
+                )
+            action = "updated"
+        else:
+            saved_id = storage_service.create_syncoid_job(
+                name=name,
+                source_dataset=source_dataset,
+                target_dataset=target_dataset,
+                schedule=schedule,
+                enabled=enabled,
+                recursive=recursive,
+                no_sync_snap=no_sync_snap,
+                compress=compress or None,
+                source_bwlimit=source_bwlimit or None,
+                target_bwlimit=target_bwlimit or None,
+                skip_parent=skip_parent,
+                create_bookmark=create_bookmark,
+                force_delete=force_delete,
+                large_blocks=large_blocks,
+                ssh_connection_id=ssh_connection_id or None,
+                replication_type=replication_type,
+            )
+            action = "created"
+
+        storage_service.update_syncoid_job_status(
+            job_id=saved_id,
+            next_run=calculate_next_run(schedule) or "",
+        )
+
+        # Register with the OS scheduler
+        saved_job = storage_service.get_syncoid_job(saved_id)
+        job_scheduler.register_job(saved_job)
+
+        return RedirectResponse(
+            url=f"/zfs/replication/syncoid?message=Scheduled job '{name}' {action}",
+            status_code=303
+        )
+    except Exception as e:
+        return _parse_job_form_error(request, str(e), form_job)
+
+
+@router.post("/syncoid/jobs/{job_id}/enable", response_class=HTMLResponse)
+async def syncoid_job_enable(request: Request, job_id: int):
+    """Enable a scheduled Syncoid job and register its OS schedule"""
+    try:
+        storage_service.update_syncoid_job(job_id=job_id, enabled=True)
+        job = storage_service.get_syncoid_job(job_id)
+        if job:
+            storage_service.update_syncoid_job_status(
+                job_id=job_id,
+                next_run=calculate_next_run(job.get('schedule', '')) or "",
+            )
+            job_scheduler.register_job(job)
+        return RedirectResponse(
+            url="/zfs/replication/syncoid?message=Scheduled job enabled",
+            status_code=303
+        )
+    except Exception as e:
+        return RedirectResponse(
+            url=f"/zfs/replication/syncoid?error={str(e)}",
+            status_code=303
+        )
+
+
+@router.post("/syncoid/jobs/{job_id}/disable", response_class=HTMLResponse)
+async def syncoid_job_disable(request: Request, job_id: int):
+    """Disable a scheduled Syncoid job and remove its OS schedule"""
+    try:
+        storage_service.update_syncoid_job(job_id=job_id, enabled=False)
+        job_scheduler.unregister_job(job_id)
+        return RedirectResponse(
+            url="/zfs/replication/syncoid?message=Scheduled job disabled",
+            status_code=303
+        )
+    except Exception as e:
+        return RedirectResponse(
+            url=f"/zfs/replication/syncoid?error={str(e)}",
+            status_code=303
+        )
+
+
+@router.post("/syncoid/jobs/{job_id}/delete", response_class=HTMLResponse)
+async def syncoid_job_delete(request: Request, job_id: int):
+    """Delete a scheduled Syncoid job and remove its OS schedule"""
+    try:
+        job_scheduler.unregister_job(job_id)
+        storage_service.delete_syncoid_job(job_id)
+        return RedirectResponse(
+            url="/zfs/replication/syncoid?message=Scheduled job deleted",
+            status_code=303
+        )
+    except Exception as e:
+        return RedirectResponse(
+            url=f"/zfs/replication/syncoid?error={str(e)}",
+            status_code=303
+        )
+
+
+@router.post("/syncoid/jobs/{job_id}/run", response_class=HTMLResponse)
+async def syncoid_job_run_now(request: Request, job_id: int):
+    """Run a scheduled Syncoid job immediately in a background thread.
+
+    Uses the same runner code path as the OS scheduler, so results
+    appear in the replication history and the job's last run status.
+    """
+    try:
+        job = storage_service.get_syncoid_job(job_id)
+        if not job:
+            return RedirectResponse(
+                url="/zfs/replication/syncoid?error=Scheduled job not found",
+                status_code=303
+            )
+
+        from services.syncoid_runner import run_syncoid_job
+        thread = threading.Thread(
+            target=run_syncoid_job,
+            kwargs={"job_id": job_id, "trigger": "manual"},
+            daemon=True
+        )
+        thread.start()
+
+        return RedirectResponse(
+            url=(
+                "/zfs/replication/history?message="
+                f"Job '{job['name']}' started; progress appears here"
+            ),
+            status_code=303
+        )
+    except Exception as e:
+        return RedirectResponse(
+            url=f"/zfs/replication/syncoid?error={str(e)}",
+            status_code=303
+        )
+
+
+@router.post("/syncoid/jobs/validate-schedule")
+async def syncoid_job_validate_schedule(data: Dict = Body(...)):
+    """Validate a cron expression and preview upcoming run times."""
+    expression = (data.get("schedule") or "").strip()
+    is_valid, schedule_error = validate_cron_expression(expression)
+    if not is_valid:
+        return JSONResponse({"valid": False, "error": schedule_error})
+    return JSONResponse({
+        "valid": True,
+        "next_runs": preview_next_runs(expression, count=5),
+    })

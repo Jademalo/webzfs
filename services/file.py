@@ -48,8 +48,11 @@ def save_file(file_path: str, content: str, use_sudo: bool = False) -> None:
     directory = os.path.dirname(file_path)
     
     if use_sudo and is_linux():
-        # Create parent directory if needed using sudo
-        if directory and not os.path.exists(directory):
+        # Ensure the parent directory exists using sudo. mkdir -p is
+        # idempotent, so no exists() pre-check is needed; skipping the
+        # check avoids a check-then-act race if the directory is
+        # created or removed by another process in the meantime.
+        if directory:
             subprocess.run(
                 ['sudo', 'mkdir', '-p', directory],
                 check=True

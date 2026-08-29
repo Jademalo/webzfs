@@ -805,7 +805,11 @@ async def sanoid_index(request: Request):
             )
         
         config = sanoid_service.get_config()
-        
+
+        # Surface errors passed back via redirect query parameter so
+        # failed mutations (e.g. config write failures) are visible.
+        redirect_error = request.query_params.get('error')
+
         return templates.TemplateResponse(
             request,
             name="zfs/snapshots/sanoid.jinja",
@@ -813,6 +817,7 @@ async def sanoid_index(request: Request):
                 "status": status,
                 "datasets": config.get('datasets', {}),
                 "templates": config.get('templates', {}),
+                "error": redirect_error,
                 "page_title": "Sanoid Scheduling"
             }
         )
@@ -939,11 +944,24 @@ async def add_sanoid_dataset_form(request: Request):
 @router.post("/sanoid/dataset/add", response_class=HTMLResponse)
 async def add_sanoid_dataset(
     request: Request,
-    dataset_name: Annotated[str, Form()],
-    template: Annotated[str, Form()],
-    recursive: Annotated[str, Form()]
+    dataset_name: Annotated[str, Form()] = "",
+    template: Annotated[str, Form()] = "",
+    recursive: Annotated[str, Form()] = "no"
 ):
     """Add a dataset to sanoid configuration"""
+    # Fields are optional at the FastAPI layer so a submission with a
+    # missing field (e.g. no templates exist yet) produces a controlled
+    # error message instead of a raw HTTP 422 response.
+    if not dataset_name:
+        return RedirectResponse(
+            url="/zfs/snapshots/sanoid?error=No dataset selected. Choose a dataset to add.",
+            status_code=303
+        )
+    if not template:
+        return RedirectResponse(
+            url="/zfs/snapshots/sanoid?error=A snapshot policy template must be created before adding datasets.",
+            status_code=303
+        )
     try:
         sanoid_service.add_dataset(
             dataset_name=dataset_name,

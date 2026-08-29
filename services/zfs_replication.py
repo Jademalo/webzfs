@@ -1,17 +1,19 @@
 """
 ZFS Replication Management Service
-Handles snapshot replication scheduling and execution similar to syncoid/sanoid
+Handles one-shot native ZFS send/receive execution with history tracking.
+Scheduled replication is handled by Syncoid jobs (services/storage.py,
+services/syncoid_runner.py, services/job_scheduler.py).
 Reference: https://github.com/jimsalterjrs/sanoid
 Hi Jim. :)
 """
 import subprocess
-import json
+import time
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from enum import Enum
 from services.storage import FileStorageService
 from services.email_notification import EmailNotificationService
-from services.utils import run_zfs_command, build_zfs_command, run_zfs_command_with_pipe
+from services.utils import run_zfs_command, build_zfs_command
 
 
 class ReplicationType(Enum):
@@ -34,137 +36,9 @@ class ZFSReplicationService:
     
     def __init__(self):
         """Initialize the replication service"""
-        # Note: Job configuration is currently stored in-memory
-        # TODO: Consider persisting job config to JSON files if needed
-        self._jobs = {}
-        self._history = []
-        
         # Initialize file storage and email services
         self.storage = FileStorageService()
         self.email = EmailNotificationService()
-    
-    def list_replication_jobs(self) -> List[Dict[str, Any]]:
-        """
-        List all configured replication jobs
-        
-        Returns:
-            List of replication job configurations
-        """
-        return list(self._jobs.values())
-    
-    def get_replication_job(self, job_id: str) -> Dict[str, Any]:
-        """
-        Get details of a specific replication job
-        
-        Args:
-            job_id: Unique identifier for the job
-            
-        Returns:
-            Job configuration dictionary
-            
-        Raises:
-            KeyError: If job_id not found
-        """
-        if job_id not in self._jobs:
-            raise KeyError(f"Replication job {job_id} not found")
-        return self._jobs[job_id]
-    
-    def create_replication_job(
-        self,
-        name: str,
-        source_dataset: str,
-        target_dataset: str,
-        replication_type: ReplicationType,
-        schedule: str,
-        enabled: bool = True,
-        recursive: bool = False,
-        compression: CompressionMethod = CompressionMethod.LZ4,
-        **options
-    ) -> str:
-        """
-        Create a new replication job
-        
-        Args:
-            name: Human-readable name for the job
-            source_dataset: Source ZFS dataset
-            target_dataset: Target ZFS dataset
-            replication_type: Type of replication (push/pull/local)
-            schedule: Cron-style schedule expression
-            enabled: Whether job is enabled
-            recursive: Replicate child datasets recursively
-            compression: Compression method to use
-            **options: Additional options:
-                - remote_host: str (for push/pull)
-                - remote_port: int
-                - ssh_key: str
-                - bandwidth_limit: str
-                - skip_parent: bool
-                - preserve_properties: bool
-                - use_bookmarks: bool
-                - force: bool (use -F flag on receive)
-                
-        Returns:
-            job_id: Unique identifier for the created job
-        """
-        import uuid
-        job_id = str(uuid.uuid4())
-        
-        job = {
-            'id': job_id,
-            'name': name,
-            'source_dataset': source_dataset,
-            'target_dataset': target_dataset,
-            'replication_type': replication_type.value,
-            'schedule': schedule,
-            'enabled': enabled,
-            'recursive': recursive,
-            'compression': compression.value,
-            'options': options,
-            'created_at': datetime.now().isoformat(),
-            'updated_at': datetime.now().isoformat(),
-        }
-        
-        self._jobs[job_id] = job
-        return job_id
-    
-    def update_replication_job(self, job_id: str, **updates) -> None:
-        """
-        Update an existing replication job
-        
-        Args:
-            job_id: Job identifier
-            **updates: Fields to update
-        """
-        if job_id not in self._jobs:
-            raise KeyError(f"Replication job {job_id} not found")
-        
-        # Handle enum conversions
-        if 'replication_type' in updates and isinstance(updates['replication_type'], str):
-            updates['replication_type'] = updates['replication_type']
-        if 'compression' in updates and isinstance(updates['compression'], str):
-            updates['compression'] = updates['compression']
-        
-        self._jobs[job_id].update(updates)
-        self._jobs[job_id]['updated_at'] = datetime.now().isoformat()
-    
-    def delete_replication_job(self, job_id: str) -> None:
-        """
-        Delete a replication job
-        
-        Args:
-            job_id: Job identifier
-        """
-        if job_id not in self._jobs:
-            raise KeyError(f"Replication job {job_id} not found")
-        del self._jobs[job_id]
-    
-    def enable_job(self, job_id: str) -> None:
-        """Enable a replication job"""
-        self.update_replication_job(job_id, enabled=True)
-    
-    def disable_job(self, job_id: str) -> None:
-        """Disable a replication job"""
-        self.update_replication_job(job_id, enabled=False)
     
     def _check_target_exists(self, target: str) -> bool:
         """
@@ -190,6 +64,7 @@ class ZFSReplicationService:
         incremental: bool = True,
         recursive: bool = False,
         raw: bool = False,
+        large_blocks: bool = False,
         compression: CompressionMethod = CompressionMethod.LZ4,
         job_id: Optional[str] = None,
         job_name: Optional[str] = None,
@@ -207,6 +82,11 @@ class ZFSReplicationService:
             recursive: Replicate recursively
             raw: Use raw send (-w flag). Required for encrypted datasets
                  to preserve encryption on the target side.
+            large_blocks: Use large-block send (-L flag). Allows the
+                 stream to contain blocks larger than 128 KiB. Required
+                 when continuing an incremental chain that was created
+                 with -L, and must remain consistent across incremental
+                 sends for the same target.
             compression: Compression method
             job_id: Optional job ID for scheduled jobs
             job_name: Optional job name
@@ -280,7 +160,7 @@ class ZFSReplicationService:
             # is found below, we rebuild with -i included.
             send_cmd = self._build_send_command(
                 source, latest_snapshot, incremental, recursive, raw,
-                compression, base_snapshot=None
+                large_blocks, compression, base_snapshot=None
             )
             receive_cmd = self._build_receive_command(
                 actual_target, replication_type, options_with_force
@@ -322,7 +202,7 @@ class ZFSReplicationService:
                 # Rebuild the send command now that we have the base snapshot
                 send_cmd = self._build_send_command(
                     source, latest_snapshot, incremental, recursive, raw,
-                    compression, base_snapshot=base_snapshot
+                    large_blocks, compression, base_snapshot=base_snapshot
                 )
                 
                 # Update the stored command string with the actual -i flag
@@ -447,31 +327,6 @@ class ZFSReplicationService:
                 'error': error_message,
                 'execution_id': execution_id
             }
-    
-    def get_replication_status(self, job_id: str) -> Dict[str, Any]:
-        """
-        Get current status of a replication job
-        
-        Args:
-            job_id: Job identifier
-            
-        Returns:
-            Status information including last run, next run, etc.
-        """
-        job = self.get_replication_job(job_id)
-        
-        # Get last execution from history
-        job_history = [h for h in self._history if h.get('job_id') == job_id]
-        last_run = job_history[-1] if job_history else None
-        
-        return {
-            'job_id': job_id,
-            'name': job['name'],
-            'enabled': job['enabled'],
-            'last_run': last_run.get('started_at') if last_run else None,
-            'last_status': last_run.get('status') if last_run else None,
-            'next_run': self._calculate_next_run(job['schedule']),
-        }
     
     def get_replication_history(
         self,
@@ -785,7 +640,8 @@ class ZFSReplicationService:
     
     def _build_send_command(
         self, dataset: str, snapshot: str, incremental: bool,
-        recursive: bool, raw: bool, compression: CompressionMethod,
+        recursive: bool, raw: bool, large_blocks: bool,
+        compression: CompressionMethod,
         base_snapshot: Optional[str] = None
     ) -> List[str]:
         """Build the zfs send command
@@ -797,6 +653,9 @@ class ZFSReplicationService:
             recursive: Whether to include child datasets
             raw: Whether to use raw send (-w). Required for encrypted
                  datasets to preserve encryption on the receiving side.
+            large_blocks: Whether to use large-block send (-L). Allows
+                 blocks larger than 128 KiB in the stream. Must be used
+                 consistently across incremental sends to the same target.
             compression: Compression method
             base_snapshot: For incremental send, the base snapshot to send from
             
@@ -814,6 +673,15 @@ class ZFSReplicationService:
         # preserves the encryption properties.
         if raw:
             cmd.append('-w')
+        
+        # Large-block send (-L) must be explicitly enabled by the user.
+        # It allows the stream to contain blocks larger than 128 KiB and
+        # is required when continuing an incremental replication chain
+        # that was originally created with -L (issue #204). OpenZFS warns
+        # that this flag must be used consistently across incremental
+        # sends, so it is never toggled automatically.
+        if large_blocks:
+            cmd.append('-L')
         
         # Add compressed send if compression is not NONE
         if compression != CompressionMethod.NONE:
@@ -872,19 +740,125 @@ class ZFSReplicationService:
         ssh_parts.extend(receive_cmd)
         return ' '.join(send_cmd) + ' | ' + ' '.join(ssh_parts)
     
+    def _estimate_send_size(self, send_cmd: List[str]) -> int:
+        """Estimate total bytes for a send command using a dry run.
+
+        Inserts -n (dry run) and -P (machine parseable) into a copy of
+        the send command and parses the reported size. Returns 0 when
+        the size cannot be determined so callers can skip percentage
+        and ETA calculations.
+        """
+        try:
+            dry_run_cmd = list(send_cmd)
+            insert_at = dry_run_cmd.index('send') + 1
+            dry_run_cmd[insert_at:insert_at] = ['-n', '-P']
+            full_cmd = build_zfs_command(dry_run_cmd)
+            result = subprocess.run(
+                full_cmd, capture_output=True, text=True, timeout=120
+            )
+            combined_output = result.stdout + '\n' + result.stderr
+            for line in combined_output.split('\n'):
+                parts = line.split()
+                if len(parts) >= 2 and parts[0] == 'size':
+                    return int(parts[1])
+        except Exception:
+            pass
+        return 0
+    
+    def _pump_with_progress(
+        self, send_process, receive_process, execution_id: int, total_bytes: int
+    ) -> int:
+        """Copy the send stream into the receive stdin, recording progress.
+        
+        Reads the zfs send output in chunks, writes it to the receiving
+        process, and records a progress update roughly every two seconds
+        so the monitor page and SSE stream have live data to display.
+        Returns the total number of bytes transferred.
+        """
+        bytes_transferred = 0
+        chunk_size = 1024 * 1024
+        start_time = time.time()
+        last_update_time = start_time
+        last_update_bytes = 0
+        
+        try:
+            while True:
+                chunk = send_process.stdout.read(chunk_size)
+                if not chunk:
+                    break
+                try:
+                    receive_process.stdin.write(chunk)
+                except (BrokenPipeError, OSError):
+                    # Receive side exited; stop pumping. The caller
+                    # surfaces the receive process stderr as the error.
+                    break
+                bytes_transferred += len(chunk)
+                
+                now = time.time()
+                if now - last_update_time >= 2:
+                    interval_rate = (
+                        (bytes_transferred - last_update_bytes)
+                        / (now - last_update_time)
+                    )
+                    percentage = 0.0
+                    eta = None
+                    if total_bytes > 0:
+                        percentage = min(
+                            bytes_transferred / total_bytes * 100, 99.9
+                        )
+                        if interval_rate > 0:
+                            remaining = max(total_bytes - bytes_transferred, 0)
+                            eta_seconds = int(remaining / interval_rate)
+                            eta = f"{eta_seconds // 60}m {eta_seconds % 60}s"
+                    try:
+                        self.storage.add_progress_update(
+                            execution_id=execution_id,
+                            bytes_transferred=bytes_transferred,
+                            percentage_complete=percentage,
+                            transfer_rate=(
+                                f"{self._format_bytes(int(interval_rate))}/s"
+                            ),
+                            estimated_time_remaining=eta,
+                            status_message=(
+                                f"Transferred "
+                                f"{self._format_bytes(bytes_transferred)}"
+                            )
+                        )
+                    except Exception:
+                        # Progress recording must never break the transfer
+                        pass
+                    last_update_time = now
+                    last_update_bytes = bytes_transferred
+        finally:
+            try:
+                receive_process.stdin.close()
+            except Exception:
+                pass
+            try:
+                send_process.stdout.close()
+            except Exception:
+                pass
+        
+        return bytes_transferred
+    
     def _execute_local_replication(
         self, send_cmd: List[str], receive_cmd: List[str], execution_id: int
     ) -> Dict[str, Any]:
         """Execute local replication using pipes with platform-appropriate sudo.
         
-        Pipes zfs send stdout into zfs receive stdin. Both processes' stderr
-        streams are captured so that when the receive side reports a generic
-        'failed to read from stream' error we can surface the real cause from
-        the send side.
+        The send stream is pumped through this process so progress
+        (bytes transferred, rate, percentage) can be recorded for the
+        real-time monitor. Both processes' stderr streams are captured
+        so that when the receive side reports a generic 'failed to read
+        from stream' error we can surface the real cause from the send
+        side.
         """
         # Build commands with sudo if needed (Linux)
         full_send_cmd = build_zfs_command(send_cmd)
         full_receive_cmd = build_zfs_command(receive_cmd)
+        
+        # Estimate total size for percentage/ETA reporting (best effort)
+        total_bytes = self._estimate_send_size(send_cmd)
         
         send_process = subprocess.Popen(
             full_send_cmd,
@@ -894,13 +868,15 @@ class ZFSReplicationService:
         
         receive_process = subprocess.Popen(
             full_receive_cmd,
-            stdin=send_process.stdout,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE
         )
         
-        # Allow send_process to receive SIGPIPE if receive_process exits
-        send_process.stdout.close()
+        # Pump the stream through this process, recording progress updates
+        bytes_transferred = self._pump_with_progress(
+            send_process, receive_process, execution_id, total_bytes
+        )
         
         # Wait for receive to finish, then wait for send to finish
         receive_output, receive_error = receive_process.communicate()
@@ -938,7 +914,11 @@ class ZFSReplicationService:
             log_parts.append(receive_error_text)
         log_output = '\n'.join(log_parts)
         
-        return {'bytes': 0, 'speed': 'N/A', 'log_output': log_output}
+        return {
+            'bytes': bytes_transferred,
+            'speed': 'N/A',
+            'log_output': log_output
+        }
     
     def _execute_remote_replication(
         self, send_cmd: List[str], receive_cmd: List[str],
@@ -947,9 +927,11 @@ class ZFSReplicationService:
         """Execute remote replication over SSH.
         
         Pipes zfs send stdout through SSH into zfs receive on the remote host.
-        Both the local send process and remote SSH process stderr streams are
-        captured so that when the remote receive reports a generic error we can
-        surface the real cause from the local send side.
+        The stream is pumped through this process so progress can be
+        recorded for the real-time monitor. Both the local send process
+        and remote SSH process stderr streams are captured so that when
+        the remote receive reports a generic error we can surface the
+        real cause from the local send side.
         """
         remote_host = options.get('remote_host')
         remote_port = options.get('remote_port', 22)
@@ -974,6 +956,9 @@ class ZFSReplicationService:
         ssh_cmd.append(remote_host)
         ssh_cmd.extend(receive_cmd)
         
+        # Estimate total size for percentage/ETA reporting (best effort)
+        total_bytes = self._estimate_send_size(send_cmd)
+        
         # Execute send | ssh receive
         send_process = subprocess.Popen(
             full_send_cmd,
@@ -983,13 +968,15 @@ class ZFSReplicationService:
         
         ssh_process = subprocess.Popen(
             ssh_cmd,
-            stdin=send_process.stdout,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE
         )
         
-        # Allow send_process to receive SIGPIPE if ssh_process exits
-        send_process.stdout.close()
+        # Pump the stream through this process, recording progress updates
+        bytes_transferred = self._pump_with_progress(
+            send_process, ssh_process, execution_id, total_bytes
+        )
         
         # Wait for SSH/receive to finish, then wait for send to finish
         ssh_output, ssh_error = ssh_process.communicate()
@@ -1024,12 +1011,11 @@ class ZFSReplicationService:
             log_parts.append(ssh_error_text)
         log_output = '\n'.join(log_parts)
         
-        return {'bytes': 0, 'speed': 'N/A', 'log_output': log_output}
-    
-    def _calculate_next_run(self, schedule: str) -> Optional[str]:
-        """Calculate next run time from cron schedule"""
-        # Simplified implementation - would use croniter in production
-        return "Next run calculation not implemented"
+        return {
+            'bytes': bytes_transferred,
+            'speed': 'N/A',
+            'log_output': log_output
+        }
     
     def _format_bytes(self, bytes: int) -> str:
         """Format bytes to human-readable string"""

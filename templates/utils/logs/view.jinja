@@ -1,0 +1,198 @@
+{% extends "layout.jinja" %}
+
+{% set active_page = 'utils' %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Page Header -->
+    <div class="flex items-center justify-between">
+        <div>
+            <div class="flex items-center gap-3">
+                <a href="/utils/logs" class="text-text-secondary hover:text-text-primary transition-colors">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+                    </svg>
+                </a>
+                <h1 class="text-3xl font-bold text-text-primary">{{ category_name }} Log</h1>
+            </div>
+            <p class="text-text-secondary mt-1 ml-9">{{ category }}.log</p>
+        </div>
+        <div class="flex gap-2">
+            <button onclick="location.reload()" class="btn btn-outline">
+                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                </svg>
+                Refresh
+            </button>
+            <a href="/utils/logs/download/{{ category }}" class="btn btn-primary" hx-boost="false">
+                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                </svg>
+                Download
+            </a>
+        </div>
+    </div>
+
+    {% if error %}
+    <div class="card-nested bg-danger-900/30 border-danger-900">
+        <div class="flex items-start gap-3">
+            <svg class="w-6 h-6 text-danger-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+            </svg>
+            <div>
+                <h3 class="text-danger-400 font-semibold">Error</h3>
+                <p class="text-text-secondary">{{ error }}</p>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- File Info & Filters -->
+    <div class="card">
+        <div class="card-body">
+            <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                <!-- File Stats -->
+                <div class="flex flex-wrap gap-6 text-sm">
+                    <div>
+                        <span class="text-text-secondary">Size:</span>
+                        <span class="text-text-primary ml-2 font-medium">{{ file_info.get('size_human', 'N/A') }}</span>
+                    </div>
+                    <div>
+                        <span class="text-text-secondary">Total Entries:</span>
+                        <span class="text-text-primary ml-2 font-medium">{{ file_info.get('line_count', 0) }}</span>
+                    </div>
+                    <div>
+                        <span class="text-text-secondary">Last Modified:</span>
+                        <span class="text-text-primary ml-2 font-medium">{{ file_info.get('modified', 'N/A') or 'N/A' }}</span>
+                    </div>
+                    <div>
+                        <span class="text-text-secondary">Showing:</span>
+                        <span class="text-text-primary ml-2 font-medium">{{ entries|length }} entries</span>
+                    </div>
+                </div>
+                
+                <!-- Search & Filter -->
+                <form method="get" class="flex gap-2">
+                    <input type="hidden" name="lines" value="{{ lines }}">
+                    <div class="relative">
+                        <input type="text" name="search" value="{{ search }}" 
+                               placeholder="Search logs..." 
+                               class="input pl-10 w-64">
+                        <svg class="w-5 h-5 text-text-secondary absolute left-3 top-1/2 transform -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                        </svg>
+                    </div>
+                    <select name="lines" class="input w-32" onchange="this.form.submit()">
+                        <option value="100" {% if lines == 100 %}selected{% endif %}>100 lines</option>
+                        <option value="500" {% if lines == 500 %}selected{% endif %}>500 lines</option>
+                        <option value="1000" {% if lines == 1000 %}selected{% endif %}>1000 lines</option>
+                        <option value="5000" {% if lines == 5000 %}selected{% endif %}>5000 lines</option>
+                    </select>
+                    <button type="submit" class="btn btn-primary">Filter</button>
+                    {% if search %}
+                    <a href="/utils/logs/view/{{ category }}?lines={{ lines }}" class="btn btn-outline">Clear</a>
+                    {% endif %}
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Log Entries -->
+    <div class="card">
+        <div class="card-body p-0">
+            {% if entries %}
+            <div class="overflow-x-auto">
+                <table class="w-full">
+                    <thead>
+                        <tr class="bg-surface-700/50 text-left">
+                            <th class="px-4 py-3 text-text-secondary font-medium text-sm w-44">Timestamp</th>
+                            <th class="px-4 py-3 text-text-secondary font-medium text-sm w-20">Level</th>
+                            <th class="px-4 py-3 text-text-secondary font-medium text-sm">Details</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-surface-600">
+                        {% for entry in entries %}
+                        <tr class="hover:bg-surface-700/30 transition-colors">
+                            <td class="px-4 py-3 font-mono text-sm text-text-secondary whitespace-nowrap">
+                                {{ entry.timestamp }}
+                            </td>
+                            <td class="px-4 py-3">
+                                {% if entry.level == 'INFO' %}
+                                <span class="px-2 py-1 text-xs font-medium rounded-full bg-success-500/20 text-success-400">INFO</span>
+                                {% elif entry.level == 'WARNING' %}
+                                <span class="px-2 py-1 text-xs font-medium rounded-full bg-warning-500/20 text-warning-400">WARN</span>
+                                {% elif entry.level == 'ERROR' %}
+                                <span class="px-2 py-1 text-xs font-medium rounded-full bg-danger-500/20 text-danger-400">ERROR</span>
+                                {% else %}
+                                <span class="px-2 py-1 text-xs font-medium rounded-full bg-surface-600 text-text-secondary">{{ entry.level }}</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-4 py-3">
+                                <div class="flex flex-wrap gap-2">
+                                    {% for key, value in entry.details.items() %}
+                                    <span class="inline-flex items-center gap-1 text-sm">
+                                        <span class="text-text-secondary">{{ key }}:</span>
+                                        {% if key == 'status' and value == 'SUCCESS' %}
+                                        <span class="text-success-400 font-medium">{{ value }}</span>
+                                        {% elif key == 'status' and value == 'FAILED' %}
+                                        <span class="text-danger-400 font-medium">{{ value }}</span>
+                                        {% elif key == 'status' and value == 'RATE_LIMITED' %}
+                                        <span class="text-warning-400 font-medium">{{ value }}</span>
+                                        {% elif key == 'user' %}
+                                        <span class="text-primary-400 font-medium">{{ value }}</span>
+                                        {% elif key == 'operation' %}
+                                        <span class="text-info-400 font-medium">{{ value }}</span>
+                                        {% elif key == 'action' %}
+                                        <span class="text-info-400 font-medium">{{ value }}</span>
+                                        {% elif key == 'error' %}
+                                        <span class="text-danger-400">{{ value }}</span>
+                                        {% else %}
+                                        <span class="text-text-primary">{{ value }}</span>
+                                        {% endif %}
+                                    </span>
+                                    {% endfor %}
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="p-8 text-center">
+                <svg class="w-16 h-16 mx-auto text-text-secondary mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                </svg>
+                <h3 class="text-xl font-semibold text-text-primary mb-2">No Log Entries</h3>
+                <p class="text-text-secondary">
+                    {% if search %}
+                    No entries matching "{{ search }}" found.
+                    {% else %}
+                    The log file is empty or does not exist yet. Log entries will appear here once activity is recorded.
+                    {% endif %}
+                </p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Legend -->
+    <div class="card-nested bg-surface-700/50">
+        <h3 class="text-sm font-semibold text-text-primary mb-3">Log Level Legend</h3>
+        <div class="flex flex-wrap gap-4 text-sm">
+            <div class="flex items-center gap-2">
+                <span class="px-2 py-1 text-xs font-medium rounded-full bg-success-500/20 text-success-400">INFO</span>
+                <span class="text-text-secondary">Successful operations</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <span class="px-2 py-1 text-xs font-medium rounded-full bg-warning-500/20 text-warning-400">WARN</span>
+                <span class="text-text-secondary">Failed attempts, rate limiting</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <span class="px-2 py-1 text-xs font-medium rounded-full bg-danger-500/20 text-danger-400">ERROR</span>
+                <span class="text-text-secondary">Operation failures</span>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

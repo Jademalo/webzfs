@@ -1,0 +1,27 @@
+{# Disk selector for the SMART test schedule form.
+
+   Rendered by GET /utils/scheduling/smart/disk-options-partial after the
+   form shell has already been shown. Probing disks with smartctl can wake
+   idle drives and take many seconds, so it must never block the initial
+   page render.
+
+   Expects: disks (list of device paths), selected (current disk value or
+   empty string), all_disks_value (the ALL_DISKS sentinel).
+#}
+<select name="disk" id="disk" class="form-select" required>
+    <option value="">Select a disk...</option>
+    <!-- All disks is one schedule covering the whole
+         fleet, so 20 disks do not need 20 tasks. -->
+    <option value="{{ all_disks_value }}" {% if selected == all_disks_value %}selected{% endif %}>All disks ({{ disks|length }} present)</option>
+    {% for disk in disks %}
+    <option value="{{ disk }}" {% if selected == disk %}selected{% endif %}>{{ disk }}</option>
+    {% endfor %}
+</select>
+<p class="text-text-tertiary text-xs mt-1">
+    All disks resolves the disk list each time the task runs, so disks added later are covered automatically.
+</p>
+{% if selected and selected != all_disks_value and selected not in disks %}
+<p class="text-warning-400 text-xs mt-1">
+    The disk this schedule refers to ({{ selected }}) is not currently present.
+</p>
+{% endif %}

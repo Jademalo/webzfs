@@ -24,7 +24,7 @@
     <!-- Page Header -->
     <div class="mb-8">
         <h1 class="text-3xl font-bold text-text-primary mb-2">Syncoid Replication</h1>
-        <p class="text-text-secondary">Advanced ZFS replication using Syncoid with automatic incremental sync</p>
+        <p class="text-text-secondary">Scheduled ZFS replication using Syncoid with automatic incremental sync</p>
     </div>
 
     <!-- Messages -->
@@ -62,217 +62,129 @@
         </div>
     {% endif %}
 
-    <!-- Execute Syncoid Form -->
+    <!-- Scheduled Syncoid Jobs -->
     <div class="card mb-6">
-        <div class="px-6 py-4 border-b border-border-subtle">
+        <div class="px-6 py-4 border-b border-border-subtle flex items-center justify-between">
             <h2 class="text-xl font-semibold text-text-primary flex items-center">
-                <svg class="w-5 h-5 mr-2 text-info-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                <svg class="w-5 h-5 mr-2 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
                 </svg>
-                Execute Syncoid Replication
+                Scheduled Jobs
             </h2>
+            <a href="/zfs/replication/syncoid/jobs/create/form" class="btn-success inline-flex items-center whitespace-nowrap">
+                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
+                </svg>
+                Create Scheduled Job
+            </a>
         </div>
         <div class="card-body">
-            <form method="post" action="/zfs/replication/syncoid/execute" id="syncoid-form">
-                
-                <!-- Step 1: Source Connection & Dataset -->
-                <div class="mb-6">
-                    <h3 class="font-semibold text-lg mb-4 text-text-primary flex items-center">
-                        <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-primary-500 text-white text-sm font-bold mr-2">1</span>
-                        Source
-                    </h3>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                            <label class="form-label" for="source_ssh_connection">
-                                Source Connection
-                            </label>
-                            <select name="source_ssh_connection_id" id="source_ssh_connection" class="form-select">
-                                <option value="">Local (this system)</option>
-                                {% if ssh_connections and ssh_connections|length > 0 %}
-                                    {% for conn in ssh_connections %}
-                                    <option value="{{ conn.id }}" 
-                                            data-host="{{ conn.host }}" 
-                                            data-username="{{ conn.username }}" 
-                                            data-port="{{ conn.port }}">
-                                        {{ conn.name }} ({{ conn.username }}@{{ conn.host }}{% if conn.port != 22 %}:{{ conn.port }}{% endif %})
-                                    </option>
-                                    {% endfor %}
+            {% if scheduled_jobs and scheduled_jobs|length > 0 %}
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-border-subtle">
+                    <thead>
+                        <tr>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-text-tertiary uppercase tracking-wider">Name</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-text-tertiary uppercase tracking-wider">Source</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-text-tertiary uppercase tracking-wider">Target</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-text-tertiary uppercase tracking-wider">Connection</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-text-tertiary uppercase tracking-wider">Schedule</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-text-tertiary uppercase tracking-wider">Last Run</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-text-tertiary uppercase tracking-wider">Status</th>
+                            <th class="px-4 py-3 text-right text-xs font-medium text-text-tertiary uppercase tracking-wider">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-border-subtle">
+                        {% for job in scheduled_jobs %}
+                        <tr>
+                            <td class="px-4 py-3 whitespace-nowrap text-sm">
+                                <a href="/zfs/replication/syncoid/jobs/{{ job.id }}/edit" class="text-primary-400 hover:text-primary-300 font-medium transition-colors">{{ job.name }}</a>
+                            </td>
+                            <td class="px-4 py-3 whitespace-nowrap text-sm text-text-secondary font-mono">{{ job.source_dataset }}</td>
+                            <td class="px-4 py-3 whitespace-nowrap text-sm text-text-secondary font-mono">{{ job.target_dataset }}</td>
+                            <td class="px-4 py-3 whitespace-nowrap text-sm text-text-secondary">
+                                {% if job.connection_missing %}
+                                    <span class="badge-danger text-xs">Connection missing</span>
+                                {% elif job.connection_name %}
+                                    {{ job.connection_name }}
+                                    <span class="text-text-tertiary text-xs">({{ job.replication_type }})</span>
+                                {% else %}
+                                    Local
                                 {% endif %}
-                            </select>
-                            <p class="text-text-tertiary text-xs mt-1">Select source system or leave as Local</p>
-                        </div>
-
-                        <div>
-                            <label class="form-label" for="source">
-                                Source Dataset <span class="text-danger-400">*</span>
-                            </label>
-                            <div class="relative">
-                                <select name="source" id="source" required class="form-select">
-                                    <option value="">-- Loading datasets... --</option>
-                                </select>
-                                <div id="source-loading" class="hidden absolute right-10 top-1/2 -translate-y-1/2">
-                                    <div class="loading-spinner loading-spinner-sm"></div>
-                                </div>
-                            </div>
-                            <p id="source-status" class="text-text-tertiary text-xs mt-1">Select a connection to load datasets</p>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Step 2: Target Connection & Dataset -->
-                <div class="mb-6">
-                    <h3 class="font-semibold text-lg mb-4 text-text-primary flex items-center">
-                        <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-success-500 text-white text-sm font-bold mr-2">2</span>
-                        Target
-                    </h3>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                            <label class="form-label" for="target_ssh_connection">
-                                Target Connection
-                            </label>
-                            <select name="target_ssh_connection_id" id="target_ssh_connection" class="form-select">
-                                <option value="">Local (this system)</option>
-                                {% if ssh_connections and ssh_connections|length > 0 %}
-                                    {% for conn in ssh_connections %}
-                                    <option value="{{ conn.id }}" 
-                                            data-host="{{ conn.host }}" 
-                                            data-username="{{ conn.username }}" 
-                                            data-port="{{ conn.port }}">
-                                        {{ conn.name }} ({{ conn.username }}@{{ conn.host }}{% if conn.port != 22 %}:{{ conn.port }}{% endif %})
-                                    </option>
-                                    {% endfor %}
+                            </td>
+                            <td class="px-4 py-3 whitespace-nowrap text-sm text-text-secondary" title="{{ job.schedule }}">{{ job.schedule_label }}</td>
+                            <td class="px-4 py-3 whitespace-nowrap text-sm text-text-secondary">
+                                {% if job.last_run %}{{ job.last_run[:16]|replace('T', ' ') }}{% else %}Never{% endif %}
+                            </td>
+                            <td class="px-4 py-3 whitespace-nowrap text-sm">
+                                {% if not job.enabled %}
+                                    <span class="badge-warning text-xs">Disabled</span>
+                                {% elif job.last_status == 'success' %}
+                                    <span class="badge-success text-xs">Success</span>
+                                {% elif job.last_status == 'failure' %}
+                                    <span class="badge-danger text-xs">Failed</span>
+                                {% elif job.last_status == 'skipped' %}
+                                    <span class="badge-warning text-xs">Skipped</span>
+                                {% else %}
+                                    <span class="badge-info text-xs">Scheduled</span>
                                 {% endif %}
-                            </select>
-                            <p class="text-text-tertiary text-xs mt-1">Select target system or leave as Local</p>
-                        </div>
-
-                        <div>
-                            <label class="form-label" for="target">
-                                Target Dataset <span class="text-danger-400">*</span>
-                            </label>
-                            <div class="relative">
-                                <select name="target" id="target" required class="form-select">
-                                    <option value="">-- Loading datasets... --</option>
-                                </select>
-                                <div id="target-loading" class="hidden absolute right-10 top-1/2 -translate-y-1/2">
-                                    <div class="loading-spinner loading-spinner-sm"></div>
+                            </td>
+                            <td class="px-4 py-3 whitespace-nowrap text-sm text-right">
+                                <div class="inline-flex items-center gap-3">
+                                    <form method="post" action="/zfs/replication/syncoid/jobs/{{ job.id }}/run" class="inline-flex">
+                                        <button type="submit" class="text-success-400 hover:text-success-300 transition-colors" title="Run Now">
+                                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                                            </svg>
+                                        </button>
+                                    </form>
+                                    <a href="/zfs/replication/syncoid/jobs/{{ job.id }}/edit" class="text-info-400 hover:text-info-300 transition-colors" title="Edit">
+                                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                                        </svg>
+                                    </a>
+                                    {% if job.enabled %}
+                                    <form method="post" action="/zfs/replication/syncoid/jobs/{{ job.id }}/disable" class="inline-flex">
+                                        <button type="submit" class="text-warning-400 hover:text-warning-300 transition-colors" title="Disable">
+                                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                                            </svg>
+                                        </button>
+                                    </form>
+                                    {% else %}
+                                    <form method="post" action="/zfs/replication/syncoid/jobs/{{ job.id }}/enable" class="inline-flex">
+                                        <button type="submit" class="text-success-400 hover:text-success-300 transition-colors" title="Enable">
+                                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                                            </svg>
+                                        </button>
+                                    </form>
+                                    {% endif %}
+                                    <form method="post" action="/zfs/replication/syncoid/jobs/{{ job.id }}/delete" class="inline-flex" onsubmit="return confirm('Delete scheduled job {{ job.name }}?');">
+                                        <button type="submit" class="text-danger-400 hover:text-danger-300 transition-colors" title="Delete">
+                                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                            </svg>
+                                        </button>
+                                    </form>
                                 </div>
-                            </div>
-                            <p id="target-status" class="text-text-tertiary text-xs mt-1">Select a connection to load datasets</p>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Topology warning shown when two different remote connections are selected -->
-                <div id="topology-warning" class="hidden mb-6 bg-danger-900/30 border border-danger-700 text-danger-400 px-4 py-3 rounded-lg text-sm">
-                    Remote-to-remote replication between two different SSH connections is not supported yet.
-                    One side must be Local, or both sides must use the same SSH connection.
-                </div>
-                
-                {% if not ssh_connections or ssh_connections|length == 0 %}
-                <div class="mb-6 bg-warning-900/30 border border-warning-700 text-warning-400 px-4 py-3 rounded-lg">
-                    <div class="flex items-start">
-                        <svg class="w-5 h-5 mr-2 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
-                        </svg>
-                        <div>
-                            <p class="font-medium">No SSH connections configured</p>
-                            <p class="text-sm mt-1">Configure SSH connections to enable remote replication.</p>
-                            <a href="/utils/ssh/add" class="btn-warning btn-sm mt-2 inline-flex items-center gap-2">
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
-                                </svg>
-                                Add SSH Connection
-                            </a>
-                        </div>
-                    </div>
-                </div>
-                {% endif %}
-
-                <!-- Advanced Options Section -->
-                <div class="mb-6">
-                    <h3 class="font-semibold text-lg mb-4 text-text-primary flex items-center">
-                        <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-info-500 text-white text-sm font-bold mr-2">3</span>
-                        Advanced Options
-                    </h3>
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <div>
-                            <label class="form-label" for="compress">
-                                Compression Algorithm
-                            </label>
-                            <select name="compress" id="compress" class="form-select">
-                                <option value="">Default</option>
-                                <option value="lz4">lz4</option>
-                                <option value="zstd">zstd</option>
-                                <option value="gzip">gzip</option>
-                                <option value="xz">xz</option>
-                                <option value="none">none</option>
-                            </select>
-                        </div>
-
-                        <div>
-                            <label class="form-label" for="source_bwlimit">
-                                Source Bandwidth Limit
-                            </label>
-                            <input type="text" name="source_bwlimit" id="source_bwlimit" class="form-input" placeholder="e.g., 10M, 1G">
-                        </div>
-
-                        <div>
-                            <label class="form-label" for="target_bwlimit">
-                                Target Bandwidth Limit
-                            </label>
-                            <input type="text" name="target_bwlimit" id="target_bwlimit" class="form-input" placeholder="e.g., 10M, 1G">
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Options Section -->
-                <div class="mb-6">
-                    <h3 class="font-semibold text-lg mb-4 text-text-primary">Replication Options</h3>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <label class="flex items-center">
-                            <input type="checkbox" name="recursive" value="true" class="form-checkbox">
-                            <span class="ml-3 text-text-secondary">Recursive (replicate child datasets)</span>
-                        </label>
-                        <label class="flex items-center">
-                            <input type="checkbox" name="no_sync_snap" value="true" class="form-checkbox">
-                            <span class="ml-3 text-text-secondary">Don't create sync snapshots</span>
-                        </label>
-                        <label class="flex items-center">
-                            <input type="checkbox" name="skip_parent" value="true" class="form-checkbox">
-                            <span class="ml-3 text-text-secondary">Skip parent dataset</span>
-                        </label>
-                        <label class="flex items-center">
-                            <input type="checkbox" name="create_bookmark" value="true" class="form-checkbox">
-                            <span class="ml-3 text-text-secondary">Create bookmarks</span>
-                        </label>
-                        <label class="flex items-center">
-                            <input type="checkbox" name="force_delete" value="true" class="form-checkbox">
-                            <span class="ml-3 text-text-secondary">Force delete conflicts</span>
-                        </label>
-                        <label class="flex items-center">
-                            <input type="checkbox" name="dry_run" value="true" class="form-checkbox">
-                            <span class="ml-3 text-text-secondary">Dry run (preview only, no changes)</span>
-                        </label>
-                    </div>
-                </div>
-
-                <!-- Actions -->
-                <div class="flex items-center justify-between pt-4 border-t border-border-subtle">
-                    <button type="submit" class="btn-primary" {% if not syncoid_status.installed %}disabled{% endif %}>
-                        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-                        </svg>
-                        Execute Syncoid
-                    </button>
-                    <a href="/zfs/replication" class="btn-secondary">
-                        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
-                        </svg>
-                        Back
-                    </a>
-                </div>
-            </form>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <p class="text-text-tertiary text-xs mt-3">
+                Jobs run through the operating system scheduler (systemd timers on Linux, root crontab on FreeBSD/NetBSD) and do not require the browser or a login session. Use the Run Now action for an immediate manual sync of an existing job, for example before system maintenance. Results appear in <a href="/zfs/replication/history" class="text-primary-400 hover:text-primary-300">Replication History</a>.
+            </p>
+            {% else %}
+            <div class="text-center py-6">
+                <p class="text-text-secondary mb-2">No scheduled Syncoid jobs configured.</p>
+                <p class="text-text-tertiary text-sm mb-2">Scheduled jobs run automatically in the background, even when the browser is closed. Once a job exists, it can also be triggered manually with the Run Now action.</p>
+                <p class="text-text-tertiary text-sm">For a one-off ad hoc transfer, use native <a href="/zfs/replication/send-receive/form" class="text-primary-400 hover:text-primary-300">ZFS Send/Receive</a> instead.</p>
+            </div>
+            {% endif %}
         </div>
     </div>
 
@@ -371,106 +283,7 @@
                 </svg>
                 <span>Bookmark support for better snapshot management</span>
             </li>
-            <li class="flex items-start">
-                <svg class="w-4 h-4 mr-2 mt-0.5 text-info-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-                </svg>
-                <span>Dry-run mode to preview changes before execution</span>
-            </li>
         </ul>
     </div>
 </div>
-
-<script>
-(function() {
-    const sourceSshSelect = document.getElementById('source_ssh_connection');
-    const targetSshSelect = document.getElementById('target_ssh_connection');
-    const sourceDatasetSelect = document.getElementById('source');
-    const targetDatasetSelect = document.getElementById('target');
-    const topologyWarning = document.getElementById('topology-warning');
-    const syncoidForm = document.getElementById('syncoid-form');
-    const sourceLoading = document.getElementById('source-loading');
-    const targetLoading = document.getElementById('target-loading');
-    const sourceStatus = document.getElementById('source-status');
-    const targetStatus = document.getElementById('target-status');
-    
-    // Check whether two different remote connections are selected.
-    // The backend rejects this topology; warn the user before submit.
-    function updateTopologyWarning() {
-        const bothRemoteAndDifferent = sourceSshSelect.value
-            && targetSshSelect.value
-            && sourceSshSelect.value !== targetSshSelect.value;
-        topologyWarning.classList.toggle('hidden', !bothRemoteAndDifferent);
-        return bothRemoteAndDifferent;
-    }
-    
-    syncoidForm.addEventListener('submit', function(event) {
-        if (updateTopologyWarning()) {
-            event.preventDefault();
-            topologyWarning.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
-    });
-    
-    // Fetch datasets for a connection
-    async function fetchDatasets(connectionId, datasetSelect, loadingEl, statusEl, isSource) {
-        loadingEl.classList.remove('hidden');
-        datasetSelect.innerHTML = '<option value="">-- Loading... --</option>';
-        datasetSelect.disabled = true;
-        statusEl.textContent = 'Loading datasets...';
-        statusEl.className = 'text-info-400 text-xs mt-1';
-        
-        try {
-            const response = await fetch('/zfs/replication/api/get-remote-datasets', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ssh_connection_id: connectionId || null })
-            });
-            
-            const data = await response.json();
-            
-            if (data.success) {
-                datasetSelect.innerHTML = '<option value="">-- Select Dataset --</option>';
-                data.datasets.forEach(ds => {
-                    const option = document.createElement('option');
-                    option.value = ds;
-                    option.textContent = ds;
-                    datasetSelect.appendChild(option);
-                });
-                
-                datasetSelect.disabled = false;
-                statusEl.textContent = data.is_local 
-                    ? `${data.datasets.length} local datasets available` 
-                    : `${data.datasets.length} datasets from ${data.connection_name}`;
-                statusEl.className = 'text-success-400 text-xs mt-1';
-            } else {
-                datasetSelect.innerHTML = '<option value="">-- Error loading --</option>';
-                statusEl.textContent = data.error || 'Failed to load datasets';
-                statusEl.className = 'text-danger-400 text-xs mt-1';
-            }
-        } catch (error) {
-            datasetSelect.innerHTML = '<option value="">-- Error --</option>';
-            statusEl.textContent = 'Connection error: ' + error.message;
-            statusEl.className = 'text-danger-400 text-xs mt-1';
-        } finally {
-            loadingEl.classList.add('hidden');
-        }
-    }
-    
-    // Handle source connection change
-    sourceSshSelect.addEventListener('change', function() {
-        updateTopologyWarning();
-        fetchDatasets(this.value, sourceDatasetSelect, sourceLoading, sourceStatus, true);
-    });
-    
-    // Handle target connection change
-    targetSshSelect.addEventListener('change', function() {
-        updateTopologyWarning();
-        fetchDatasets(this.value, targetDatasetSelect, targetLoading, targetStatus, false);
-    });
-    
-    // Load local datasets on page load
-    fetchDatasets('', sourceDatasetSelect, sourceLoading, sourceStatus, true);
-    fetchDatasets('', targetDatasetSelect, targetLoading, targetStatus, false);
-})();
-</script>
 {% endblock %}
