@@ -3,6 +3,14 @@
 # WebZFS Update Script for Linux
 # This script updates an existing WebZFS installation at /opt/webzfs
 # For initial installation, use install_linux.sh instead
+#
+# The updater compares the Python version inside the existing venv against
+# the WebZFS minimum Python version (MINIMUM_PYTHON_VERSION). If the venv
+# Python is older than the minimum, the venv is rebuilt with a newer system
+# interpreter and all dependencies are reinstalled. Venvs already on a newer
+# Python (for example 3.13 or 3.14 on rolling distributions) are left alone.
+# This mechanism keeps installations current as the minimum Python version
+# moves forward over the years (3.11 to 3.12 today, later 3.12 to 3.13).
 
 set -e
 
@@ -10,6 +18,13 @@ INSTALL_DIR="/opt/webzfs"
 VENV_DIR="${INSTALL_DIR}/.venv"
 LOG_FILE="${INSTALL_DIR}/update_log.txt"
 WEBZFS_USER="webzfs"
+
+# WebZFS minimum Python version. Bump when the project moves to a newer
+# Python. On Linux, native packages compile from source, so any interpreter
+# at or above this version is acceptable.
+MINIMUM_PYTHON_MAJOR=3
+MINIMUM_PYTHON_MINOR=12
+MINIMUM_PYTHON_VERSION="${MINIMUM_PYTHON_MAJOR}.${MINIMUM_PYTHON_MINOR}"
 
 # Determine the source directory (where this script is located)
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,6 +39,27 @@ echo "========================================"
 echo "WebZFS Update Script for Linux"
 echo "========================================"
 echo
+
+# Function to check if command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Function to find a Python interpreter meeting the minimum version.
+# Prefer the newest available interpreter.
+find_python() {
+    for py in python3.14 python3.13 python3.12 python3; do
+        if command_exists "$py"; then
+            py_minor=$("$py" -c 'import sys; print(sys.version_info[1])' 2>/dev/null || echo 0)
+            py_major=$("$py" -c 'import sys; print(sys.version_info[0])' 2>/dev/null || echo 0)
+            if [ "$py_major" -gt "$MINIMUM_PYTHON_MAJOR" ] || { [ "$py_major" -eq "$MINIMUM_PYTHON_MAJOR" ] && [ "$py_minor" -ge "$MINIMUM_PYTHON_MINOR" ]; }; then
+                echo "$py"
+                return 0
+            fi
+        fi
+    done
+    return 1
+}
 
 # Check if running as root
 if [ "$EUID" -ne 0 ]; then 
@@ -62,11 +98,6 @@ if ! id "$WEBZFS_USER" &>/dev/null; then
     echo "Please run install_linux.sh for initial installation"
     exit 1
 fi
-
-# Function to check if command exists
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
-}
 
 # Node.js/npm preflight (GitHub issue #209).
 # The update rebuilds CSS with npm install and npm run build:css as the
@@ -136,6 +167,47 @@ fi
 echo -e "${GREEN}✓${NC} Node.js $(node --version) found"
 echo -e "${GREEN}✓${NC} npm $(npm --version) found"
 
+# Check the venv Python version against the WebZFS minimum Python version.
+# If the venv interpreter is older than the minimum, the venv must be
+# rebuilt because native extension modules are tied to the Python ABI.
+REBUILD_VENV=false
+NEW_PYTHON_PATH=""
+VENV_PYTHON_VERSION=""
+VENV_PYTHON_MAJOR=0
+VENV_PYTHON_MINOR=0
+if [ -x "${VENV_DIR}/bin/python3" ]; then
+    VENV_PYTHON_VERSION=$("${VENV_DIR}/bin/python3" -c 'import sys; print(".".join(map(str, sys.version_info[:2])))' 2>/dev/null || true)
+    VENV_PYTHON_MAJOR=$(echo "$VENV_PYTHON_VERSION" | cut -d. -f1)
+    VENV_PYTHON_MINOR=$(echo "$VENV_PYTHON_VERSION" | cut -d. -f2)
+fi
+VENV_PYTHON_MAJOR=${VENV_PYTHON_MAJOR:-0}
+VENV_PYTHON_MINOR=${VENV_PYTHON_MINOR:-0}
+
+if [ "$VENV_PYTHON_MAJOR" -lt "$MINIMUM_PYTHON_MAJOR" ] || { [ "$VENV_PYTHON_MAJOR" -eq "$MINIMUM_PYTHON_MAJOR" ] && [ "$VENV_PYTHON_MINOR" -lt "$MINIMUM_PYTHON_MINOR" ]; }; then
+    echo
+    echo -e "${YELLOW}Python version upgrade required:${NC}"
+    echo "  The existing virtual environment uses Python ${VENV_PYTHON_VERSION:-unknown}."
+    echo "  WebZFS now requires Python ${MINIMUM_PYTHON_VERSION} or newer."
+
+    NEW_PYTHON_CMD=$(find_python) || true
+    if [ -z "$NEW_PYTHON_CMD" ]; then
+        echo -e "${RED}Error: No Python ${MINIMUM_PYTHON_VERSION}+ interpreter found on this system${NC}"
+        echo "Please install Python ${MINIMUM_PYTHON_VERSION} or newer with your package manager"
+        echo "(for example: apt install python${MINIMUM_PYTHON_VERSION} python${MINIMUM_PYTHON_VERSION}-venv)"
+        echo "and run this update script again."
+        exit 1
+    fi
+
+    NEW_PYTHON_PATH=$(command -v "$NEW_PYTHON_CMD")
+    NEW_PYTHON_VERSION=$("$NEW_PYTHON_CMD" -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
+    echo "  Upgrading the virtual environment from Python ${VENV_PYTHON_VERSION:-unknown} to ${NEW_PYTHON_VERSION}."
+    echo "  All Python dependencies will be reinstalled for the new version."
+    REBUILD_VENV=true
+else
+    echo -e "${GREEN}✓${NC} Virtual environment Python ${VENV_PYTHON_VERSION} meets the minimum (${MINIMUM_PYTHON_VERSION})"
+fi
+
+echo
 
 # Check if service is running
 SERVICE_WAS_RUNNING=false
@@ -152,8 +224,17 @@ echo
 echo "Updating application files from $SOURCE_DIR to $INSTALL_DIR..."
 rsync -a --exclude='.venv' --exclude='node_modules' --exclude='.git' --exclude='*.log' \
     --exclude='__pycache__' --exclude='*.pyc' --exclude='.env' --exclude='.config' \
+    --exclude='/install*.sh' --exclude='/update*.sh' \
+    --exclude='/integrations/cockpit/install.sh' \
     --exclude='config/gunicorn.conf.py' \
     "${SOURCE_DIR}/" "$INSTALL_DIR/"
+
+# Remove installer and updater entry points copied by older releases. These
+# are source-tree administration tools and must not remain in /opt/webzfs.
+find "$INSTALL_DIR" -maxdepth 1 -type f \
+    \( -name 'install*.sh' -o -name 'update*.sh' \) -exec rm -f {} +
+rm -f "$INSTALL_DIR/integrations/cockpit/install.sh"
+rm -f "$INSTALL_DIR/templates/install_omnios.sh"
 
 # Set ownership
 chown -R "$WEBZFS_USER:$WEBZFS_USER" "$INSTALL_DIR"
@@ -315,6 +396,17 @@ set -e
 export HOME="/opt/webzfs"
 
 cd /opt/webzfs
+
+REBUILD_VENV="$REBUILD_VENV"
+NEW_PYTHON_PATH="$NEW_PYTHON_PATH"
+
+# Rebuild the virtual environment if a Python version upgrade is required
+if [ "\$REBUILD_VENV" = "true" ]; then
+    echo "Rebuilding virtual environment with \$NEW_PYTHON_PATH..."
+    rm -rf .venv
+    "\$NEW_PYTHON_PATH" -m venv .venv
+    echo "Virtual environment recreated"
+fi
 
 echo "Upgrading pip in virtual environment..."
 .venv/bin/python3 -m pip install --upgrade pip > update_log.txt 2>&1

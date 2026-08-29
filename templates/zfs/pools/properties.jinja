@@ -50,7 +50,11 @@
 
     <!-- Properties Table -->
     {% if properties %}
+    {% if supports_ashift %}
     {% set editable_props = ['comment', 'readonly', 'ashift', 'autoexpand', 'autoreplace', 'autotrim', 'bootfs', 'cachefile', 'delegation', 'failmode', 'listsnapshots', 'multihost'] %}
+    {% else %}
+    {% set editable_props = ['comment', 'readonly', 'autoexpand', 'autoreplace', 'autotrim', 'bootfs', 'cachefile', 'delegation', 'failmode', 'listsnapshots', 'multihost'] %}
+    {% endif %}
     
     <!-- Define property options -->
     {% set property_options = {

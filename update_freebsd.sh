@@ -3,6 +3,13 @@
 # WebZFS Update Script for FreeBSD
 # This script updates an existing WebZFS installation at /opt/webzfs
 # For initial installation, use install_freebsd.sh instead
+#
+# The updater compares the Python version inside the existing venv against
+# the WebZFS target Python version (TARGET_PYTHON_VERSION). If they differ,
+# the venv is rebuilt with the target interpreter and the pre-compiled
+# wheels are re-downloaded for the new ABI. This mechanism keeps
+# installations current as the target Python version moves forward over
+# the years (3.11 to 3.12 today, 3.12 to 3.13 or later in the future).
 
 set -e
 
@@ -11,10 +18,15 @@ VENV_DIR="${INSTALL_DIR}/.venv"
 LOG_FILE="${INSTALL_DIR}/update_log.txt"
 WHEELS_DIR="${INSTALL_DIR}/.wheels"
 
+# WebZFS target Python version and ABI. Bump these when the project moves
+# to a newer Python. The pre-compiled wheels are built for this ABI.
+TARGET_PYTHON_VERSION="3.12"
+TARGET_PYTHON_TAG="cp312"
 # GitHub raw URL base for pre-compiled wheels
 WHEELS_REPO_BASE="https://github.com/webzfs/webzfs-wheels/raw/main/wheelhouse"
 
 # Wheel packages to download (these require compilation without pre-built wheels)
+
 # Versions must match the pins in requirements.txt and the list in
 # install_freebsd.sh. The wheels cached from the initial install only cover
 # the versions pinned at install time; whenever requirements.txt bumps a
@@ -31,10 +43,26 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Function to detect FreeBSD version and determine wheel directory.
-# Mirrors the same function in install_freebsd.sh.
+# Function to check if command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Function to find the target Python interpreter.
+# Prefer the exact target version so the venv matches the pre-compiled wheels.
+find_python() {
+    for py in python${TARGET_PYTHON_VERSION} python3.13 python3; do
+        if command_exists "$py"; then
+            echo "$py"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Function to detect FreeBSD version and determine wheel directory
+# (mirrors the logic in install_freebsd.sh)
 detect_freebsd_version() {
-    # Get FreeBSD version (e.g., "14.3-RELEASE" or "15.1-RELEASE")
     FREEBSD_VERSION=$(freebsd-version -u 2>/dev/null || uname -r)
     MAJOR_VERSION=$(echo "$FREEBSD_VERSION" | cut -d. -f1)
     MINOR_VERSION=$(echo "$FREEBSD_VERSION" | cut -d. -f2 | cut -d- -f1)
@@ -44,8 +72,11 @@ detect_freebsd_version() {
     # Map to wheel directory based on major and minor version
     case "${MAJOR_VERSION}.${MINOR_VERSION}" in
         14.3)
-            WHEEL_SUBDIR="freebsd14-3"
-            WHEEL_PLATFORM="freebsd_14_3_release_amd64"
+            # FreeBSD 14.3 is EOL and cp312 wheels are not published for it.
+            # Fall back to the 14.4 wheels, which are ABI compatible.
+            printf "${YELLOW}Warning: FreeBSD 14.3 is EOL. Falling back to FreeBSD 14.4 wheels.${NC}\n"
+            WHEEL_SUBDIR="freebsd14-4"
+            WHEEL_PLATFORM="freebsd_14_4_release_p1_amd64"
             ;;
         14.4)
             WHEEL_SUBDIR="freebsd14-4"
@@ -60,7 +91,7 @@ detect_freebsd_version() {
             WHEEL_PLATFORM="freebsd_15_1_release_p1_amd64"
             ;;
         15.*)
-            # Newer 15.x minor releases: fall back to the latest 15.x wheels we build
+            # Newer 15.x releases use the latest published 15.x wheel set.
             printf "${YELLOW}Warning: FreeBSD ${MAJOR_VERSION}.${MINOR_VERSION} wheels not published yet.${NC}\n"
             printf "${YELLOW}Falling back to FreeBSD 15.1 wheels (should be compatible).${NC}\n"
             WHEEL_SUBDIR="freebsd15-1"
@@ -68,9 +99,9 @@ detect_freebsd_version() {
             ;;
         *)
             printf "${YELLOW}Warning: FreeBSD ${MAJOR_VERSION}.${MINOR_VERSION} is not directly supported.${NC}\n"
-            printf "${YELLOW}Attempting to use FreeBSD 14.3 wheels (may not work).${NC}\n"
-            WHEEL_SUBDIR="freebsd14-3"
-            WHEEL_PLATFORM="freebsd_14_3_release_amd64"
+            printf "${YELLOW}Attempting to use FreeBSD 14.4 wheels (may not work).${NC}\n"
+            WHEEL_SUBDIR="freebsd14-4"
+            WHEEL_PLATFORM="freebsd_14_4_release_p1_amd64"
             ;;
     esac
 
@@ -78,32 +109,30 @@ detect_freebsd_version() {
 }
 
 # Function to download pre-compiled wheels for the versions pinned in
-# requirements.txt. Wheels already cached from the initial install or a
-# previous update are kept and skipped. On download failure the update
-# continues and pip falls back to source compilation for that package.
+# requirements.txt and the target Python ABI. Wheels already cached from
+# the initial install or a previous update are kept and skipped. On download
+# failure the update continues and pip falls back to source compilation.
 download_wheels() {
-    echo "Downloading pre-compiled wheels..."
+    echo "Downloading pre-compiled wheels for ${TARGET_PYTHON_TAG} from ${WHEEL_SUBDIR}..."
     mkdir -p "$WHEELS_DIR"
 
     WHEELS_URL="${WHEELS_REPO_BASE}/${WHEEL_SUBDIR}"
     DOWNLOAD_FAILED=0
 
     for pkg_version in $WHEEL_PACKAGES; do
-        # Extract package name (replace - with _ for wheel filename)
         pkg_name=$(echo "$pkg_version" | sed 's/-[0-9].*//')
         version=$(echo "$pkg_version" | sed 's/.*-//')
         wheel_pkg_name=$(echo "$pkg_name" | tr '-' '_')
 
-        # Determine ABI tag based on package.
-        # cryptography publishes a stable-ABI (abi3) wheel; from 45.x onward
-        # its minimum interpreter tag is cp311.  All other packages ship
-        # version-specific cp311 wheels.
+        # cryptography publishes a stable-ABI (abi3) wheel tagged cp311-abi3
+        # (compatible with Python 3.11+). All other packages ship
+        # version-specific wheels for the target ABI.
         case "$pkg_name" in
             cryptography)
                 ABI_TAG="cp311-abi3"
                 ;;
             *)
-                ABI_TAG="cp311-cp311"
+                ABI_TAG="${TARGET_PYTHON_TAG}-${TARGET_PYTHON_TAG}"
                 ;;
         esac
 
@@ -127,9 +156,9 @@ download_wheels() {
     done
 
     if [ "$DOWNLOAD_FAILED" -eq 1 ]; then
-        printf "${YELLOW}Some wheels failed to download. pip will attempt to compile those packages from source.${NC}\n"
+        printf "${YELLOW}Some wheels failed to download. Pip will attempt source compilation.${NC}\n"
     else
-        printf "${GREEN}✓${NC} All wheels available\n"
+        printf "${GREEN}✓${NC} All wheels downloaded successfully\n"
     fi
 }
 
@@ -176,6 +205,44 @@ if [ ! -f "/usr/local/etc/rc.d/webzfs" ]; then
     exit 1
 fi
 
+# Check the venv Python version against the WebZFS target Python version.
+# If they differ, the venv must be rebuilt with the target interpreter so
+# native extension modules match the pre-compiled wheel ABI.
+REBUILD_VENV=false
+VENV_PYTHON_VERSION=""
+if [ -x "${VENV_DIR}/bin/python3" ]; then
+    VENV_PYTHON_VERSION=$("${VENV_DIR}/bin/python3" -c 'import sys; print(".".join(map(str, sys.version_info[:2])))' 2>/dev/null || true)
+fi
+
+if [ "$VENV_PYTHON_VERSION" != "$TARGET_PYTHON_VERSION" ]; then
+    echo
+    printf "${YELLOW}Python version upgrade required:${NC}\n"
+    echo "  The existing virtual environment uses Python ${VENV_PYTHON_VERSION:-unknown}."
+    echo "  WebZFS now targets Python ${TARGET_PYTHON_VERSION}."
+    echo "  The virtual environment will be upgraded from Python ${VENV_PYTHON_VERSION:-unknown} to ${TARGET_PYTHON_VERSION}"
+    echo "  and all Python dependencies will be reinstalled for the new version."
+    REBUILD_VENV=true
+
+    # Make sure the target interpreter is available
+    if ! command_exists "python${TARGET_PYTHON_VERSION}"; then
+        echo
+        echo "Installing python${TARGET_PYTHON_VERSION} via pkg..."
+        PKG_PY_VERSION=$(echo "$TARGET_PYTHON_VERSION" | tr -d '.')
+        pkg install -y "python${PKG_PY_VERSION}"
+    fi
+
+    PYTHON_CMD=$(find_python)
+    if [ -z "$PYTHON_CMD" ]; then
+        printf "${RED}Error: Python ${TARGET_PYTHON_VERSION} could not be installed${NC}\n"
+        exit 1
+    fi
+    PYTHON_PATH=$(command -v "$PYTHON_CMD")
+    NEW_PYTHON_VERSION=$($PYTHON_CMD -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
+    printf "${GREEN}✓${NC} Python ${NEW_PYTHON_VERSION} found (${PYTHON_CMD})\n"
+fi
+
+echo
+
 # Check if service is running
 SERVICE_WAS_RUNNING=false
 if service webzfs status >/dev/null 2>&1; then
@@ -204,6 +271,16 @@ __pycache__
 .config
 .wheels
 config/gunicorn.conf.py
+install_linux.sh
+update_linux.sh
+install_freebsd.sh
+update_freebsd.sh
+install_netbsd.sh
+update_netbsd.sh
+install_linux_cockpit.sh
+update_linux_cockpit.sh
+integrations/cockpit/install.sh
+templates/install_omnios.sh
 EOF
 
 # Create a backup tar of the source, excluding unwanted files
@@ -211,6 +288,15 @@ EOF
     (cd "$INSTALL_DIR" && tar xf -)
 
 rm -f "$EXCLUDE_FILE"
+
+# Remove installer and updater entry points copied by older releases. These
+# are source-tree administration tools and must not remain in /opt/webzfs.
+for stale_script in "$INSTALL_DIR"/install*.sh "$INSTALL_DIR"/update*.sh; do
+    [ -f "$stale_script" ] || continue
+    rm -f "$stale_script"
+done
+rm -f "$INSTALL_DIR/integrations/cockpit/install.sh"
+rm -f "$INSTALL_DIR/templates/install_omnios.sh"
 
 printf "${GREEN}✓${NC} Application files updated\n"
 echo
@@ -301,6 +387,27 @@ if command -v gmake >/dev/null 2>&1; then
     export MAKE=$(command -v gmake)
 fi
 
+# Rebuild the virtual environment if a Python version upgrade is required
+if [ "$REBUILD_VENV" = "true" ]; then
+    echo "Rebuilding virtual environment with Python ${TARGET_PYTHON_VERSION}..."
+    rm -rf .venv
+    $PYTHON_PATH -m venv .venv
+    printf "${GREEN}✓${NC} Virtual environment recreated\n"
+
+    # Bootstrap pip if ensurepip did not seed it
+    if [ ! -x ".venv/bin/pip" ] && [ ! -x ".venv/bin/pip3" ]; then
+        .venv/bin/python3 -m ensurepip --upgrade > update_log.txt 2>&1
+    fi
+
+    # Clear cached wheels built for the old ABI. The unconditional wheel
+    # refresh below repopulates the cache for the target ABI.
+    if [ -d "$WHEELS_DIR" ]; then
+        echo "Clearing wheel cache from previous Python ABI..."
+        rm -rf "$WHEELS_DIR"
+    fi
+    echo
+fi
+
 echo "Upgrading pip in virtual environment..."
 .venv/bin/python3 -m pip install --upgrade pip > update_log.txt 2>&1
 
@@ -311,7 +418,6 @@ echo "Upgrading pip in virtual environment..."
 detect_freebsd_version
 download_wheels
 
-# Adapt wheel platform tags for local system (handles FreeBSD patch levels)
 FIND_LINKS_FLAG=""
 if [ -d "$WHEELS_DIR" ]; then
     LOCAL_PLATFORM=$(.venv/bin/python3 -c "import sysconfig; print(sysconfig.get_platform().replace('.', '_').replace('-', '_'))")
