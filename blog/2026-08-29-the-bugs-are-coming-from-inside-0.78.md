@@ -11,7 +11,7 @@ So, in the interest of transparency, here are some of the more entertaining fixe
 
 ### Scheduled Jobs Now Survive Reboots
 
-Previously, scheduled replication jobs were stored in a Python dictionary, as one does... but In RAM. This worked perfectly, assuming WebZFS never restarted, the server never rebooted, and users did not expect scheduled jobs to persist through the passage of time. Cause rebooting is only for changing hardware right?
+Previously, scheduled replication jobs were stored in a Python dictionary, as one does... in RAM. This worked perfectly, assuming WebZFS never restarted, the server never rebooted, and users did not expect scheduled jobs to persist through the passage of time. Cause rebooting is only for changing hardware right?
 
 Now, there's a new scheduler which behaves much more like... well... a scheduler.
 
