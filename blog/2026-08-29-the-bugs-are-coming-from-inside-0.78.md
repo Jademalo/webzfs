@@ -1,5 +1,5 @@
-# WebZFS 0.78: The release where I heroically fix problems I created myself
-![brave sir robin](https://raw.githubusercontent.com/webzfs/webzfs/refs/heads/0.78/blog/images/sirrobin.gif)
+# WebZFS 0.78: The bugs are coming from inside the house
+![inside the hoouse](https://raw.githubusercontent.com/webzfs/webzfs/refs/heads/main/blog/images/inside.jpg)
 
 WebZFS 0.78 is ready, and it contains a pile of fixes. Some of these are legitimate edge cases. Some are nice improvements. And some are the sort of bugs where the correct technical explanation is:
 
