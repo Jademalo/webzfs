@@ -830,10 +830,19 @@ class ZFSReplicationService:
                     last_update_time = now
                     last_update_bytes = bytes_transferred
         finally:
-            try:
-                receive_process.stdin.close()
-            except Exception:
-                pass
+            # Do not close receive_process.stdin here.
+            #
+            # The caller immediately invokes Popen.communicate(), which owns
+            # flushing and closing the receive-side stdin pipe while draining
+            # stdout/stderr and waiting for the process to terminate.
+            #
+            # Closing stdin here causes communicate() to attempt to flush an
+            # already-closed file object, resulting in:
+            #
+            #     ValueError: flush of closed file
+            #
+            # Closing send_process.stdout is still appropriate because this
+            # helper has finished consuming the send stream.
             try:
                 send_process.stdout.close()
             except Exception:
