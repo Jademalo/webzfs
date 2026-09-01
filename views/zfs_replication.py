@@ -965,6 +965,7 @@ async def syncoid_job_save(
     create_bookmark: Annotated[bool, Form()] = False,
     force_delete: Annotated[bool, Form()] = False,
     large_blocks: Annotated[bool, Form()] = False,
+    additional_flags: Annotated[str, Form()] = "",
 ):
     """Create or update a scheduled Syncoid job and register it with
     the OS scheduler (systemd timer on Linux, root crontab on BSD)."""
@@ -980,6 +981,7 @@ async def syncoid_job_save(
             target_dataset = f"{target_dataset}/{target_new_child}"
         else:
             target_dataset = target_new_child
+    additional_flags = additional_flags.strip()
     form_job = {
         "id": int(job_id) if job_id else None,
         "name": name,
@@ -998,6 +1000,7 @@ async def syncoid_job_save(
         "create_bookmark": create_bookmark,
         "force_delete": force_delete,
         "large_blocks": large_blocks,
+        "additional_flags": additional_flags,
     }
 
     try:
@@ -1051,6 +1054,7 @@ async def syncoid_job_save(
                 create_bookmark=create_bookmark,
                 force_delete=force_delete,
                 large_blocks=large_blocks,
+                additional_flags=additional_flags,
                 ssh_connection_id=ssh_connection_id,
                 replication_type=replication_type,
             )
@@ -1075,6 +1079,7 @@ async def syncoid_job_save(
                 create_bookmark=create_bookmark,
                 force_delete=force_delete,
                 large_blocks=large_blocks,
+                additional_flags=additional_flags or None,
                 ssh_connection_id=ssh_connection_id or None,
                 replication_type=replication_type,
             )
