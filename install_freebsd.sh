@@ -58,20 +58,18 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
-# Function to find Python 3.11 on FreeBSD
-# FreeBSD installs python311 as python3.11, not python3.
+# Function to find Python 3.12 on FreeBSD
+# FreeBSD installs python312 as python3.12, not python3.
 #
-# IMPORTANT: python3.11 must be preferred over any other version. The
-# pre-compiled wheels WebZFS downloads are built for the cp311 ABI. On
-# FreeBSD 15.x the default Python flavor is 3.12, so python3.12 is commonly
-# present as a dependency of other packages (node, npm, etc.). If the venv is
-# created with python3.12 the version-specific cp311 wheels (pydantic-core,
-# bcrypt, cffi, markupsafe, psutil, pynacl) do not match and pip falls back to
-# building from source, which fails without Rust. Searching python3.11 first
-# guarantees the venv matches the wheels.
+# IMPORTANT: python3.12 must be preferred over any other version. The
+# pre-compiled wheels WebZFS downloads are built for the cp312 ABI. If the
+# venv is created with a different interpreter, the version-specific cp312
+# wheels (pydantic-core, bcrypt, cffi, markupsafe, psutil, pynacl) do not
+# match and pip falls back to building from source, which fails without
+# Rust. Searching python3.12 first guarantees the venv matches the wheels.
 find_python() {
-    # Prefer python3.11 to match the cp311 pre-compiled wheels.
-    for py in python3.11 python3.12 python3.13 python3; do
+    # Prefer python3.12 to match the cp312 pre-compiled wheels.
+    for py in python3.12 python3.13 python3; do
         if command_exists "$py"; then
             echo "$py"
             return 0
@@ -93,8 +91,11 @@ detect_freebsd_version() {
     # Map to wheel directory based on major and minor version
     case "${MAJOR_VERSION}.${MINOR_VERSION}" in
         14.3)
-            WHEEL_SUBDIR="freebsd14-3"
-            WHEEL_PLATFORM="freebsd_14_3_release_amd64"
+            # FreeBSD 14.3 is EOL and cp312 wheels are not published for it.
+            # Fall back to the 14.4 wheels, which are ABI compatible.
+            printf "${YELLOW}Warning: FreeBSD 14.3 is EOL. Falling back to FreeBSD 14.4 wheels.${NC}\n"
+            WHEEL_SUBDIR="freebsd14-4"
+            WHEEL_PLATFORM="freebsd_14_4_release_p1_amd64"
             ;;
         14.4)
             WHEEL_SUBDIR="freebsd14-4"
@@ -117,9 +118,9 @@ detect_freebsd_version() {
             ;;
         *)
             printf "${YELLOW}Warning: FreeBSD ${MAJOR_VERSION}.${MINOR_VERSION} is not directly supported.${NC}\n"
-            printf "${YELLOW}Attempting to use FreeBSD 14.3 wheels (may not work).${NC}\n"
-            WHEEL_SUBDIR="freebsd14-3"
-            WHEEL_PLATFORM="freebsd_14_3_release_amd64"
+            printf "${YELLOW}Attempting to use FreeBSD 14.4 wheels (may not work).${NC}\n"
+            WHEEL_SUBDIR="freebsd14-4"
+            WHEEL_PLATFORM="freebsd_14_4_release_p1_amd64"
             ;;
     esac
     
@@ -143,13 +144,13 @@ download_wheels() {
         # Determine ABI tag based on package.
         # cryptography publishes a stable-ABI (abi3) wheel; from 45.x onward
         # its minimum interpreter tag is cp311.  All other packages ship
-        # version-specific cp311 wheels.
+        # version-specific cp312 wheels.
         case "$pkg_name" in
             cryptography)
                 ABI_TAG="cp311-abi3"
                 ;;
             *)
-                ABI_TAG="cp311-cp311"
+                ABI_TAG="cp312-cp312"
                 ;;
         esac
         
@@ -199,15 +200,14 @@ echo "(This may take a few minutes on first run...)"
 echo
 
 # Install packages via pkg
-# python311 - Python runtime (bundles pip via ensurepip, so a separate
-#             py311-pip package is not required and is not built for the
-#             default Python flavor on FreeBSD 15.x)
+# python312 - Python runtime (bundles pip via ensurepip, so a separate
+#             py312-pip package is not required)
 # node/npm - Node.js for building CSS assets
 # smartmontools - SMART disk monitoring
 # sanoid - ZFS snapshot management (includes syncoid for replication)
 # libsodium - runtime dependency of pynacl (used by paramiko for SSH)
 # Note: rust, gmake are NOT needed when using pre-compiled wheels
-pkg install -y python311 node npm smartmontools sanoid libsodium
+pkg install -y python312 node npm smartmontools sanoid libsodium
 
 if [ $? -ne 0 ]; then
     printf "${RED}Error: Failed to install required packages${NC}\n"
@@ -234,12 +234,17 @@ PYTHON_VERSION=$($PYTHON_CMD -c 'import sys; print(".".join(map(str, sys.version
 PYTHON_MAJOR=$(echo $PYTHON_VERSION | cut -d. -f1)
 PYTHON_MINOR=$(echo $PYTHON_VERSION | cut -d. -f2)
 
-if [ "$PYTHON_MAJOR" -lt 3 ] || { [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 11 ]; }; then
-    printf "${RED}Error: Python 3.11+ is required (found $PYTHON_VERSION)${NC}\n"
+if [ "$PYTHON_MAJOR" -lt 3 ] || { [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 12 ]; }; then
+    printf "${RED}Error: Python 3.12+ is required (found $PYTHON_VERSION)${NC}\n"
     exit 1
 fi
 
 printf "${GREEN}✓${NC} Python $PYTHON_VERSION found ($PYTHON_CMD)\n"
+
+if [ "$PYTHON_VERSION" != "3.12" ]; then
+    printf "${YELLOW}Warning:${NC} Pre-compiled wheels target Python 3.12 (cp312).\n"
+    echo "  Using Python ${PYTHON_VERSION} will force source compilation of native packages."
+fi
 
 if ! command_exists node; then
     printf "${RED}Error: Node.js was not installed correctly${NC}\n"
@@ -370,9 +375,9 @@ export HOME="$INSTALL_DIR"
 
 # Create virtual environment
 # If a venv already exists but was built with a different Python version than
-# the one selected here, it must be recreated. A common failure mode on
-# FreeBSD 15.x is a leftover venv created with python3.12 that does not match
-# the cp311 pre-compiled wheels, which forces pip to compile from source.
+# the one selected here, it must be recreated. A common failure mode is a
+# leftover venv created with an older Python (for example 3.11) that does not
+# match the cp312 pre-compiled wheels, which forces pip to compile from source.
 if [ -d ".venv" ]; then
     EXPECTED_VERSION="$PYTHON_VERSION"
     EXISTING_VERSION=""
@@ -393,10 +398,9 @@ else
 fi
 
 
-# Verify pip was seeded into the venv by ensurepip (bundled with python311).
-# The py311-pip system package is not required and does not exist for the
-# default Python flavor on FreeBSD 15.x, so we bootstrap pip here if needed
-# instead of relying on that package.
+# Verify pip was seeded into the venv by ensurepip (bundled with python312).
+# The py312-pip system package is not required, so we bootstrap pip here if
+# needed instead of relying on that package.
 if [ ! -x ".venv/bin/pip" ] && [ ! -x ".venv/bin/pip3" ]; then
     echo "pip not found in virtual environment, bootstrapping with ensurepip..."
     .venv/bin/python3 -m ensurepip --upgrade > install_log.txt 2>&1

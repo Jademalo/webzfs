@@ -334,13 +334,28 @@
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <!-- AShift -->
                         <div>
-                            <label for="ashift" class="form-label text-sm">Sector Size (ashift)</label>
-                            <select id="ashift" name="ashift" class="form-select">
-                                <option value="">Auto (Recommended)</option>
+                            <label for="ashift" class="form-label text-sm">
+                                Sector Size (ashift)
+                                {% if not supports_ashift %}
+                                <span class="text-text-tertiary text-xs ml-2">(Not supported on this platform)</span>
+                                {% endif %}
+                            </label>
+                            <select id="ashift" name="ashift"
+                                class="form-select {% if not supports_ashift %}opacity-50 cursor-not-allowed{% endif %}"
+                                {% if not supports_ashift %}disabled{% endif %}
+                            >
+                                <option value="" {% if not supports_ashift %}selected{% endif %}>Auto (Recommended)</option>
+                                {% if supports_ashift %}
                                 <option value="9">9 (512-byte sectors)</option>
                                 <option value="12" selected>12 (4K sectors)</option>
                                 <option value="13">13 (8K sectors)</option>
+                                {% endif %}
                             </select>
+                            {% if not supports_ashift %}
+                            <p class="text-text-tertiary text-xs mt-1">
+                                The ashift property is not supported on NetBSD ZFS. The sector size will be auto-detected.
+                            </p>
+                            {% endif %}
                         </div>
 
                         <!-- Force Creation -->

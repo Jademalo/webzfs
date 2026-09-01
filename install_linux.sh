@@ -47,11 +47,14 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
-# Function to find Python 3.11+
-# Some distributions install python311 as python3.11, not python3
+# Function to find Python 3.12+
+# Some distributions install versioned binaries (python3.12) rather than
+# updating the python3 symlink. Prefer the newest available interpreter.
+# WebZFS targets Python 3.12 as its minimum; newer versions (3.13, 3.14)
+# are fine on Linux since native packages are compiled from source.
 find_python() {
-    # Check for specific versions first
-    for py in python3.13 python3.12 python3.11 python3; do
+    # Check for specific versions first, newest first
+    for py in python3.14 python3.13 python3.12 python3; do
         if command_exists "$py"; then
             echo "$py"
             return 0
@@ -66,7 +69,7 @@ echo "Checking prerequisites..."
 PYTHON_CMD=$(find_python)
 if [ -z "$PYTHON_CMD" ]; then
     echo -e "${RED}Error: Python 3 is not installed${NC}"
-    echo "Please install Python 3.11+ and try again"
+    echo "Please install Python 3.12+ and try again"
     exit 1
 fi
 
@@ -77,8 +80,8 @@ PYTHON_VERSION=$($PYTHON_CMD -c 'import sys; print(".".join(map(str, sys.version
 PYTHON_MAJOR=$(echo $PYTHON_VERSION | cut -d. -f1)
 PYTHON_MINOR=$(echo $PYTHON_VERSION | cut -d. -f2)
 
-if [ "$PYTHON_MAJOR" -lt 3 ] || { [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 11 ]; }; then
-    echo -e "${RED}Error: Python 3.11+ is required (found $PYTHON_VERSION)${NC}"
+if [ "$PYTHON_MAJOR" -lt 3 ] || { [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 12 ]; }; then
+    echo -e "${RED}Error: Python 3.12+ is required (found $PYTHON_VERSION)${NC}"
     exit 1
 fi
 
@@ -305,10 +308,23 @@ cd /opt/webzfs
 
 # Use the full Python path
 PYTHON_PATH="$PYTHON_PATH"
+EXPECTED_VERSION="$PYTHON_VERSION"
 
 # Create virtual environment
+# Recreate it if an existing venv was built with a different Python version,
+# since native extension modules are not compatible across Python ABIs.
 if [ -d ".venv" ]; then
-    echo "Virtual environment already exists"
+    EXISTING_VERSION=""
+    if [ -x ".venv/bin/python3" ]; then
+        EXISTING_VERSION=\$(.venv/bin/python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))' 2>/dev/null || true)
+    fi
+    if [ "\$EXISTING_VERSION" = "\$EXPECTED_VERSION" ]; then
+        echo "Virtual environment already exists (Python \$EXISTING_VERSION)"
+    else
+        echo "Existing virtual environment uses Python '\$EXISTING_VERSION', recreating with Python \$EXPECTED_VERSION..."
+        rm -rf .venv
+        \$PYTHON_PATH -m venv .venv
+    fi
 else
     echo "Creating Python virtual environment..."
     \$PYTHON_PATH -m venv .venv

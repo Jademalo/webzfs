@@ -58,7 +58,7 @@ Ok... now back to your regularly scheduled README.md...
 
 - **Linux**: Any distribution with OpenZFS support
 - **FreeBSD**: FreeBSD 13.x and later with OpenZFS
-- **NetBSD**: FreeBSD 10.x and later with OpenZFS
+- **NetBSD**: NetBSD 10.1 and 11.0 (amd64) with OpenZFS
 
 The application automatically detects the operating system and adapts its behavior accordingly.
 
@@ -67,7 +67,7 @@ The application automatically detects the operating system and adapts its behavi
 ### Prerequisites
 
 - Linux or FreeBSD with ZFS support
-- Python 3.11+
+- Python 3.12+
 - Node.js v20+ and npm
 - sudo (required on Linux; the service runs as an unprivileged user and uses sudo for approved commands. Note: Proxmox VE does not install sudo by default)
 - ZFS utilities (zpool, zfs, zdb)

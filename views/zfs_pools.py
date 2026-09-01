@@ -14,6 +14,7 @@ from services.disk_utils import DiskUtilsService
 from services.diagnostics import collect_pool_diagnostics
 from services.pool_usage import PoolUsageService
 from services.audit_logger import audit_logger
+from services.utils import is_netbsd
 from auth.dependencies import get_current_user
 
 
@@ -460,6 +461,8 @@ async def stop_scrub(request: Request, pool_name: str, current_user: str = Depen
 @router.get("/create/form", response_class=HTMLResponse)
 async def create_pool_form(request: Request):
     """Display pool creation form"""
+    # NetBSD ZFS does not support the ashift pool property
+    supports_ashift = not is_netbsd()
     try:
         # Get available disks
         available_disks = disk_service.get_available_disks()
@@ -475,6 +478,7 @@ async def create_pool_form(request: Request):
                 "available_disks": available_disks,
                 "hdds": hdds,
                 "ssds": ssds,
+                "supports_ashift": supports_ashift,
                 "page_title": "Create ZFS Pool"
             }
         )
@@ -486,6 +490,7 @@ async def create_pool_form(request: Request):
                 "available_disks": [],
                 "hdds": [],
                 "ssds": [],
+                "supports_ashift": supports_ashift,
                 "error": f"Error loading disks: {str(e)}",
                 "page_title": "Create ZFS Pool"
             }
@@ -586,8 +591,9 @@ async def create_pool(
                 vdevs.extend(dedup_list)
         
         # Build properties dictionary
+        # NetBSD ZFS does not support the ashift pool property
         properties = {}
-        if ashift:
+        if ashift and not is_netbsd():
             properties['ashift'] = ashift
         
         pool_service.create_pool(pool_name, vdevs, properties=properties if properties else None, force=force)
@@ -612,6 +618,7 @@ async def create_pool(
                 "vdev_type": vdev_type,
                 "devices": devices,
                 "ashift": ashift,
+                "supports_ashift": not is_netbsd(),
                 "page_title": "Create ZFS Pool"
             }
         )
@@ -763,6 +770,7 @@ async def pool_properties(request: Request, pool_name: str):
             context={
                 "pool_name": pool_name,
                 "properties": properties,
+                "supports_ashift": not is_netbsd(),
                 "page_title": f"Pool Properties: {pool_name}"
             }
         )

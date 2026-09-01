@@ -63,6 +63,27 @@ class SyncoidService:
     def __init__(self):
         """Initialize the syncoid service and discover the binary path"""
         self.syncoid_path = self._find_syncoid_path()
+
+    @staticmethod
+    def parse_additional_flags(additional_flags: Optional[str]) -> List[str]:
+        """Parse user-supplied Syncoid flags into argv tokens.
+
+        Shell-style quoting is supported for option values containing spaces,
+        and the resulting tokens are passed directly to subprocess without a
+        shell. WebZFS does not validate individual Syncoid options.
+
+        Args:
+            additional_flags: Additional Syncoid flags entered in the job form.
+
+        Returns:
+            Parsed argument tokens, or an empty list when no flags were entered.
+
+        Raises:
+            ValueError: If shell-style quoting is malformed.
+        """
+        if not additional_flags or not additional_flags.strip():
+            return []
+        return shlex.split(additional_flags, posix=True)
     
     def _find_syncoid_path(self) -> Optional[str]:
         """
@@ -188,6 +209,7 @@ class SyncoidService:
         ssh_key: Optional[str] = None,
         ssh_options: Optional[List[str]] = None,
         send_options: Optional[str] = None,
+        additional_flags: Optional[str] = None,
         source_host: Optional[str] = None,
         target_host: Optional[str] = None,
         debug: bool = False,
@@ -223,6 +245,10 @@ class SyncoidService:
                           --sendoptions (e.g. 'L' for large-block send).
                           Validated against ALLOWED_SEND_OPTIONS; any
                           other value is rejected (issue #204).
+            additional_flags: Shell-style additional Syncoid flags. The text
+                              is parsed with shlex and appended as argv tokens
+                              before the source and target. It is never passed
+                              to a shell.
             source_host: Source SSH host (alternative to including in source string)
             target_host: Target SSH host (alternative to including in target string)
             debug: Enable debug output
@@ -316,6 +342,8 @@ class SyncoidService:
             
             if quiet:
                 cmd.append('--quiet')
+
+            cmd.extend(self.parse_additional_flags(additional_flags))
             
             # Build source string
             if source_host:
