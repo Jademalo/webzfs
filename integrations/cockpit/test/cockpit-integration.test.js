@@ -439,6 +439,7 @@ test("audits every template form for Cockpit submit compatibility", () => {
     assert.match(encodedForms[0].tag, /\/utils\/settings\/backup\/inspect/);
 });
 
+
 test("audits Fleet routes and pool modal compatibility", () => {
     const projectRoot = path.resolve(__dirname, "../../..");
     const fleetTemplate = fs.readFileSync(
@@ -482,6 +483,7 @@ test("audits Fleet routes and pool modal compatibility", () => {
     assert.match(createTemplate, /diskEl\.dataset\.status = 'available'/);
     assert.match(createTemplate, /diskEl\.dataset\.isSystem === 'true'/);
     assert.match(createTemplate, /data-detected-status-badge/);
+
 });
 
 test("routes fetch requests through the bridge and parses JSON", async () => {
