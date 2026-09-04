@@ -206,6 +206,24 @@
                     <p id="large-blocks-hint" class="hidden mt-2 text-xs text-info-400">
                         Large blocks was enabled automatically because the source dataset uses a recordsize larger than 128 KiB.
                     </p>
+
+                    <div class="mt-5 pt-4 border-t border-border-subtle">
+                        <label class="flex items-center" for="additional_flags_enabled">
+                            <input type="checkbox" id="additional_flags_enabled" class="form-checkbox"
+                                   {% if job and job.additional_flags %}checked{% endif %}>
+                            <span class="ml-3 text-text-secondary font-medium">Add advanced Syncoid flags</span>
+                        </label>
+                        <div id="additional-flags-field" class="mt-3 {% if not job or not job.additional_flags %}hidden{% endif %}">
+                            <label class="form-label" for="additional_flags">Additional Flags</label>
+                            <input type="text" name="additional_flags" id="additional_flags" class="form-input font-mono"
+                                   value="{{ job.additional_flags if job and job.additional_flags else '' }}"
+                                   placeholder="e.g., --no-clone-handling --identifier nightly"
+                                   {% if not job or not job.additional_flags %}disabled{% else %}required{% endif %}>
+                            <p class="text-text-tertiary text-xs mt-1">
+                                Enter the additional arguments exactly as they should appear before the source and target datasets in the Syncoid command.
+                            </p>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Command Preview -->
@@ -246,6 +264,26 @@
                     </a>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <div id="additional-flags-warning" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-labelledby="additional-flags-warning-title">
+        <div class="card w-full max-w-lg border-warning-700 shadow-2xl">
+            <div class="px-6 py-4 border-b border-border-subtle">
+                <h2 id="additional-flags-warning-title" class="text-xl font-semibold text-warning-400">Advanced Syncoid Flags Warning</h2>
+            </div>
+            <div class="card-body space-y-4">
+                <p class="text-text-secondary">
+                    Manually adding flags may create a malformed or unsafe Syncoid command. An incorrect command could cause replication failure, corrupted data, or permanent data loss.
+                </p>
+                <p class="text-text-secondary font-medium">
+                    WebZFS will add your text to the generated command without validating the individual flags. You are responsible for verifying that the complete command is correct in the Command Preview card before confirming and saving this job.
+                </p>
+                <div class="flex justify-end gap-3 pt-2">
+                    <button type="button" id="cancel-additional-flags" class="btn-secondary">Cancel</button>
+                    <button type="button" id="confirm-additional-flags" class="btn-warning">I Understand and Accept Responsibility</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -540,6 +578,13 @@
     const compressSelect = document.getElementById('compress');
     const sourceBwInput = document.getElementById('source_bwlimit');
     const targetBwInput = document.getElementById('target_bwlimit');
+    const additionalFlagsEnabled = document.getElementById('additional_flags_enabled');
+    const additionalFlagsField = document.getElementById('additional-flags-field');
+    const additionalFlagsInput = document.getElementById('additional_flags');
+    const additionalFlagsWarning = document.getElementById('additional-flags-warning');
+    const confirmAdditionalFlags = document.getElementById('confirm-additional-flags');
+    const cancelAdditionalFlags = document.getElementById('cancel-additional-flags');
+    let additionalFlagsAccepted = additionalFlagsEnabled.checked;
 
     function optionCheckbox(name) {
         return document.querySelector('input[name="' + name + '"]');
@@ -579,6 +624,9 @@
         if (optionCheckbox('create_bookmark').checked) { parts.push('--create-bookmark'); }
         if (optionCheckbox('force_delete').checked) { parts.push('--force-delete'); }
         if (largeBlocksCheckbox.checked) { parts.push('--sendoptions=L'); }
+        if (additionalFlagsEnabled.checked && additionalFlagsInput.value.trim()) {
+            parts.push(additionalFlagsInput.value.trim());
+        }
 
         let hostPrefix = '<user>@<host>:';
         const selectedConn = sshConnectionSelect.options[sshConnectionSelect.selectedIndex];
@@ -622,6 +670,42 @@
     compressSelect.addEventListener('change', updateCommandPreview);
     sourceBwInput.addEventListener('input', updateCommandPreview);
     targetBwInput.addEventListener('input', updateCommandPreview);
+    function setAdditionalFlagsEnabled(enabled) {
+        additionalFlagsEnabled.checked = enabled;
+        additionalFlagsField.classList.toggle('hidden', !enabled);
+        additionalFlagsInput.disabled = !enabled;
+        additionalFlagsInput.required = enabled;
+        updateCommandPreview();
+    }
+
+    function closeAdditionalFlagsWarning() {
+        additionalFlagsWarning.classList.add('hidden');
+        additionalFlagsWarning.classList.remove('flex');
+    }
+
+    additionalFlagsEnabled.addEventListener('change', function() {
+        if (this.checked && !additionalFlagsAccepted) {
+            this.checked = false;
+            additionalFlagsWarning.classList.remove('hidden');
+            additionalFlagsWarning.classList.add('flex');
+            return;
+        }
+        if (!this.checked) {
+            additionalFlagsAccepted = false;
+        }
+        setAdditionalFlagsEnabled(this.checked);
+    });
+    confirmAdditionalFlags.addEventListener('click', function() {
+        additionalFlagsAccepted = true;
+        closeAdditionalFlagsWarning();
+        setAdditionalFlagsEnabled(true);
+        additionalFlagsInput.focus();
+    });
+    cancelAdditionalFlags.addEventListener('click', function() {
+        closeAdditionalFlagsWarning();
+        setAdditionalFlagsEnabled(false);
+    });
+    additionalFlagsInput.addEventListener('input', updateCommandPreview);
     ['recursive', 'no_sync_snap', 'skip_parent', 'create_bookmark',
      'force_delete', 'large_blocks'].forEach(function(name) {
         const box = optionCheckbox(name);

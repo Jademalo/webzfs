@@ -464,9 +464,11 @@ class ZFSPoolService:
             if force:
                 cmd.append('-f')
             
-            # Add properties
+            # Add properties (strip ashift on NetBSD where it is not supported)
             if properties:
                 for key, value in properties.items():
+                    if key == 'ashift' and is_netbsd():
+                        continue
                     cmd.extend(['-o', f'{key}={value}'])
             
             cmd.append(pool_name)

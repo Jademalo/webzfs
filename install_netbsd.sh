@@ -13,17 +13,19 @@ INSTALL_DIR="/opt/webzfs"
 VENV_DIR="${INSTALL_DIR}/.venv"
 ENV_FILE="${INSTALL_DIR}/.env"
 LOG_FILE="${INSTALL_DIR}/install_log.txt"
-WHEELS_DIR="${INSTALL_DIR}/.wheels"
+WHEELS_BASE_DIR="${INSTALL_DIR}/.wheels"
+PLATFORM_MARKER="${INSTALL_DIR}/.install-platform"
 
 # GitHub raw URL base for pre-compiled wheels
 WHEELS_REPO_BASE="https://github.com/webzfs/webzfs-wheels/raw/main/wheelhouse"
 
-# NetBSD 10.x wheel configuration
-WHEEL_SUBDIR="netbsd10-1"
-WHEEL_PLATFORM="netbsd_10_1_amd64"
+# Python ABI target for pre-compiled wheels
+PYTHON_PKG_VERSION="312"
+PYTHON_TAG="cp312"
 
 # Wheel packages to download (these require compilation without pre-built wheels)
-WHEEL_PACKAGES="cryptography-44.0.0 markupsafe-3.0.3 psutil-7.1.3 pydantic_core-2.41.5"
+# Versions must match the pins in requirements.txt.
+WHEEL_PACKAGES="cryptography-49.0.0 markupsafe-3.0.3 psutil-7.2.2 pydantic_core-2.46.4 bcrypt-5.0.0 cffi-2.1.0 pynacl-1.6.2"
 
 # Determine the source directory (where this script is located)
 SOURCE_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -51,15 +53,49 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
-# Function to find Python 3.11+
+# Function to find Python
+# Prefer python3.12 to match the cp312 pre-compiled wheels.
 find_python() {
-    for py in python3.13 python3.12 python3.11 python3; do
+    for py in python3.12 python3.13 python3; do
         if command_exists "$py"; then
             echo "$py"
             return 0
         fi
     done
     return 1
+}
+
+# Function to detect NetBSD release/architecture and select the wheel set.
+# Fails clearly on unsupported combinations instead of silently using
+# wheels built for another release.
+detect_netbsd_platform() {
+    NETBSD_RELEASE=$(uname -r | cut -d_ -f1)
+    NETBSD_MAJOR=$(echo "$NETBSD_RELEASE" | cut -d. -f1)
+    NETBSD_MINOR=$(echo "$NETBSD_RELEASE" | cut -d. -f2)
+    NETBSD_ARCH=$(uname -m)
+
+    echo "Detected NetBSD ${NETBSD_RELEASE} (${NETBSD_ARCH})"
+
+    case "${NETBSD_MAJOR}.${NETBSD_MINOR}:${NETBSD_ARCH}" in
+        10.1:amd64)
+            WHEEL_SUBDIR="netbsd10-1"
+            WHEEL_PLATFORM="netbsd_10_1_amd64"
+            ;;
+        11.0:amd64)
+            WHEEL_SUBDIR="netbsd11-0"
+            WHEEL_PLATFORM="netbsd_11_0_amd64"
+            ;;
+        *)
+            printf "${RED}Error: No pre-compiled wheel set exists for NetBSD ${NETBSD_RELEASE} on ${NETBSD_ARCH}${NC}\n"
+            echo "Supported platforms: NetBSD 10.1 amd64, NetBSD 11.0 amd64"
+            echo "Installation on other releases/architectures requires building"
+            echo "the native Python packages from source, which is not automated"
+            echo "by this installer."
+            exit 1
+            ;;
+    esac
+
+    printf "${GREEN}✓${NC} Using wheel set: ${WHEEL_SUBDIR}\n"
 }
 
 # Parse command line arguments
@@ -113,22 +149,22 @@ install_dependencies() {
 
     # Install System Packages
     echo "Installing system packages via pkgin..."
-    pkgin -y install python311 py311-pip nodejs smartmontools \
+    pkgin -y install python312 py312-pip nodejs smartmontools \
                      git perl mbuffer lzop pv mozilla-rootcerts \
                      p5-Config-IniFiles p5-Capture-Tiny \
                      gmake libsodium curl pkg-config openssl
 
     # Create Python symlinks if they don't exist
     if [ ! -f /usr/pkg/bin/python3 ]; then
-        if [ -f /usr/pkg/bin/python3.11 ]; then
-            ln -sf /usr/pkg/bin/python3.11 /usr/pkg/bin/python3
+        if [ -f /usr/pkg/bin/python3.12 ]; then
+            ln -sf /usr/pkg/bin/python3.12 /usr/pkg/bin/python3
             printf "${GREEN}✓${NC} Created python3 symlink\n"
         fi
     fi
 
     if [ ! -f /usr/pkg/bin/pip ] && [ ! -f /usr/pkg/bin/pip3 ]; then
-        if [ -f /usr/pkg/bin/pip3.11 ]; then
-            ln -sf /usr/pkg/bin/pip3.11 /usr/pkg/bin/pip
+        if [ -f /usr/pkg/bin/pip3.12 ]; then
+            ln -sf /usr/pkg/bin/pip3.12 /usr/pkg/bin/pip
             printf "${GREEN}✓${NC} Created pip symlink\n"
         fi
     fi
@@ -147,28 +183,10 @@ install_dependencies() {
     printf "${GREEN}✓${NC} System packages installed\n"
     echo
 
-    # Install Rust via rustup (pkgsrc rust package has issues on some systems)
-    echo "Checking Rust installation..."
-    
-    # Source cargo env if it exists
-    if [ -f "/root/.cargo/env" ]; then
-        . "/root/.cargo/env"
-    elif [ -f "$HOME/.cargo/env" ]; then
-        . "$HOME/.cargo/env"
-    fi
-
-    if ! command_exists rustc || ! rustc --version >/dev/null 2>&1; then
-        echo "Installing Rust via rustup..."
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
-        # Source cargo env for current session
-        . "/root/.cargo/env" 2>/dev/null || . "$HOME/.cargo/env" 2>/dev/null || true
-        # Set default toolchain
-        rustup default stable
-        printf "${GREEN}✓${NC} Rust installed via rustup\n"
-    else
-        printf "${GREEN}✓${NC} Rust already installed\n"
-    fi
-    echo
+    # Rust is intentionally not installed here. Pre-compiled wheels make a
+    # Rust toolchain unnecessary for a normal installation. If wheel
+    # download fails later, the installer offers a source-build fallback
+    # that installs Rust via rustup at that point.
 
     # SSL Setup (Required for Git)
     echo "Setting up SSL certificates..."
@@ -264,16 +282,27 @@ done
 # Check prerequisites
 echo "Checking prerequisites..."
 
+# Detect NetBSD release/architecture and select the wheel set
+detect_netbsd_platform
+WHEELS_DIR="${WHEELS_BASE_DIR}/${WHEEL_SUBDIR}-${PYTHON_TAG}-${NETBSD_ARCH}"
+echo
+
 PYTHON_CMD=$(find_python)
 if [ -z "$PYTHON_CMD" ]; then
     printf "${RED}Error: Python 3 is not installed${NC}\n"
-    echo "Please install Python 3.11+ first"
+    echo "Please install Python 3.12 first (pkgin install python312 py312-pip)"
     exit 1
 fi
 
 PYTHON_PATH=$(command -v "$PYTHON_CMD")
 PYTHON_VERSION=$($PYTHON_CMD -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
 printf "${GREEN}✓${NC} Python $PYTHON_VERSION found ($PYTHON_CMD)\n"
+
+if [ "$PYTHON_VERSION" != "3.12" ]; then
+    printf "${YELLOW}Warning:${NC} Pre-compiled wheels target Python 3.12 (${PYTHON_TAG}).\n"
+    echo "  Using Python ${PYTHON_VERSION} will force source compilation of native packages."
+    echo "  Install Python 3.12 with: pkgin install python312 py312-pip"
+fi
 
 if ! command_exists node; then
     printf "${RED}Error: Node.js is not installed${NC}\n"
@@ -413,24 +442,36 @@ for pkg_version in $WHEEL_PACKAGES; do
     version=$(echo "$pkg_version" | sed 's/.*-//')
     wheel_pkg_name=$(echo "$pkg_name" | tr '-' '_')
 
-    # Determine ABI tag - cryptography uses cp37-abi3, others use cp311-cp311
+    # Determine ABI tag - cryptography publishes abi3 wheels tagged
+    # cp311-abi3 (compatible with 3.11+), others use cp312-cp312
     if [ "$pkg_name" = "cryptography" ]; then
-        ABI_TAG="cp37-abi3"
+        ABI_TAG="cp311-abi3"
     else
-        ABI_TAG="cp311-cp311"
+        ABI_TAG="${PYTHON_TAG}-${PYTHON_TAG}"
     fi
 
     wheel_filename="${wheel_pkg_name}-${version}-${ABI_TAG}-${WHEEL_PLATFORM}.whl"
     wheel_url="${WHEELS_URL}/${wheel_filename}"
     wheel_path="${WHEELS_DIR}/${wheel_filename}"
 
+    # Discard any previously cached file that is not a valid wheel. Wheels
+    # are zip archives and start with the PK magic bytes. A curl run
+    # without -f can leave an HTML error page behind with a .whl name.
+    if [ -f "$wheel_path" ] && ! head -c 2 "$wheel_path" 2>/dev/null | grep -q "PK"; then
+        printf "  ${YELLOW}Removing invalid cached file for ${pkg_name}${NC}\n"
+        rm -f "$wheel_path"
+    fi
+
     if [ -f "$wheel_path" ]; then
         printf "  ${GREEN}✓${NC} ${pkg_name} wheel already exists\n"
     else
         printf "  Downloading ${pkg_name}..."
-        if curl -sL -o "$wheel_path" "$wheel_url" 2>/dev/null; then
+        # -f makes curl fail on HTTP errors (404) instead of saving the
+        # error page as the wheel file.
+        if curl -fsSL -o "$wheel_path" "$wheel_url" 2>/dev/null && head -c 2 "$wheel_path" 2>/dev/null | grep -q "PK"; then
             printf " ${GREEN}✓${NC}\n"
         else
+            rm -f "$wheel_path"
             printf " ${RED}FAILED${NC}\n"
             printf "${YELLOW}Warning: Could not download wheel for ${pkg_name}${NC}\n"
             printf "  URL: ${wheel_url}\n"
@@ -443,7 +484,7 @@ if [ "$DOWNLOAD_FAILED" -eq 1 ]; then
     echo
     printf "${YELLOW}Some wheels failed to download.${NC}\n"
     printf "The installer will attempt to compile these packages from source.\n"
-    printf "This may require additional build dependencies (rust, gmake, etc.)\n"
+    printf "This requires a Rust toolchain and build dependencies (gmake, etc.)\n"
     echo
     printf "Do you want to continue anyway? (y/n): "
     read -r REPLY
@@ -451,8 +492,40 @@ if [ "$DOWNLOAD_FAILED" -eq 1 ]; then
         echo "Installation aborted."
         exit 1
     fi
+
+    # Install Rust via rustup for the source-build fallback
+    # (the pkgsrc rust package has Bus error issues on NetBSD)
+    if [ -f "/root/.cargo/env" ]; then
+        . "/root/.cargo/env"
+    elif [ -f "$HOME/.cargo/env" ]; then
+        . "$HOME/.cargo/env"
+    fi
+    if ! command_exists rustc || ! rustc --version >/dev/null 2>&1; then
+        echo "Installing Rust via rustup (required for source compilation)..."
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+        . "/root/.cargo/env" 2>/dev/null || . "$HOME/.cargo/env" 2>/dev/null || true
+        rustup default stable
+        printf "${GREEN}✓${NC} Rust installed via rustup\n"
+    fi
 else
     printf "${GREEN}✓${NC} All wheels downloaded successfully\n"
+fi
+
+# Verify the wheel platform tags match this system's local platform tag.
+# If they differ (for example a patch-level difference in the release
+# string), rename the wheel files so pip accepts them on this system.
+LOCAL_PLATFORM=$($PYTHON_PATH -c "import sysconfig; print(sysconfig.get_platform().replace('.', '_').replace('-', '_'))")
+if [ "$LOCAL_PLATFORM" != "$WHEEL_PLATFORM" ]; then
+    printf "${YELLOW}Note:${NC} Local platform '${LOCAL_PLATFORM}' differs from wheel platform '${WHEEL_PLATFORM}'\n"
+    printf "Adapting wheel filenames for local platform compatibility...\n"
+    for whl in "$WHEELS_DIR"/*-"${WHEEL_PLATFORM}".whl; do
+        if [ -f "$whl" ]; then
+            new_whl=$(echo "$whl" | sed "s/${WHEEL_PLATFORM}/${LOCAL_PLATFORM}/")
+            if [ ! -f "$new_whl" ]; then
+                cp "$whl" "$new_whl"
+            fi
+        fi
+    done
 fi
 
 echo
@@ -487,8 +560,22 @@ if command_exists rustup; then
 fi
 
 # Create virtual environment
+# Recreate it if an existing venv uses a different Python version (for
+# example a cp311 venv from an older install), since native extension
+# modules are not compatible across Python ABIs.
 if [ -d ".venv" ]; then
-    echo "Virtual environment already exists"
+    VENV_PYTHON_VERSION=""
+    if [ -x ".venv/bin/python3" ]; then
+        VENV_PYTHON_VERSION=$(.venv/bin/python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))' 2>/dev/null || true)
+    fi
+    if [ "$VENV_PYTHON_VERSION" = "$PYTHON_VERSION" ]; then
+        echo "Virtual environment already exists (Python ${VENV_PYTHON_VERSION})"
+    else
+        echo "Existing virtual environment uses Python '${VENV_PYTHON_VERSION}', recreating with Python ${PYTHON_VERSION}..."
+        rm -rf .venv
+        $PYTHON_PATH -m venv .venv
+        printf "${GREEN}✓${NC} Virtual environment recreated\n"
+    fi
 else
     echo "Creating Python virtual environment..."
     $PYTHON_PATH -m venv .venv
@@ -498,7 +585,18 @@ echo "Installing/upgrading pip in virtual environment..."
 .venv/bin/python3 -m pip install --upgrade pip > install_log.txt 2>&1
 
 echo "Installing Python dependencies (using pre-compiled wheels)..."
-.venv/bin/pip install --find-links="$WHEELS_DIR" -r requirements.txt >> install_log.txt 2>&1
+if ! .venv/bin/pip install --find-links="$WHEELS_DIR" -r requirements.txt >> install_log.txt 2>&1; then
+    printf "${RED}Error: Failed to install Python dependencies${NC}\n"
+    echo "Check ${INSTALL_DIR}/install_log.txt for details"
+    echo
+    echo "Common causes:"
+    echo "  - Pre-compiled wheels not yet published for this platform"
+    echo "    (pip then tries source compilation, which requires Rust)"
+    echo "  - Network connectivity issues (pure-Python packages download from PyPI)"
+    echo "  - Wheel platform tag mismatch (check local platform with:"
+    echo "    $PYTHON_PATH -c \"import sysconfig; print(sysconfig.get_platform())\")"
+    exit 1
+fi
 
 echo "Installing Node.js dependencies..."
 npm install >> install_log.txt 2>&1
@@ -525,6 +623,20 @@ printf "${GREEN}✓${NC} Python dependencies installed\n"
 printf "${GREEN}✓${NC} Node.js dependencies installed\n"
 printf "${GREEN}✓${NC} Static assets built\n"
 printf "${GREEN}✓${NC} Configuration file created\n"
+echo
+
+# Write installation platform marker so the updater can detect OS
+# release or Python ABI transitions and rebuild the venv when needed
+cat > "$PLATFORM_MARKER" << MARKER_EOF
+os=NetBSD
+release=${NETBSD_RELEASE}
+arch=${NETBSD_ARCH}
+python=${PYTHON_VERSION}
+python_tag=${PYTHON_TAG}
+wheel_platform=${WHEEL_PLATFORM}
+wheel_set=${WHEEL_SUBDIR}
+MARKER_EOF
+printf "${GREEN}✓${NC} Installation platform marker written to ${PLATFORM_MARKER}\n"
 echo
 
 # ============================================================
@@ -716,7 +828,8 @@ echo
 echo "WebZFS has been installed to: $INSTALL_DIR"
 echo "Note: On NetBSD, the service runs as root for PAM authentication"
 echo
-echo "Pre-compiled wheels used for: cryptography, markupsafe, psutil, pydantic-core"
+echo "Pre-compiled wheels used for: bcrypt, cffi, cryptography, markupsafe,"
+echo "psutil, pydantic-core, pynacl"
 echo "Wheels cached in: $WHEELS_DIR"
 echo
 echo "To start the application manually:"
