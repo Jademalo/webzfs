@@ -6,9 +6,10 @@ let
 
   # Define all binaries required specifically by WebZFS
   webzfsPkgs = with pkgs; [
-    #zfs
+    zfs
     smartmontools
     sanoid
+    cronie
   ];
 
 in
@@ -110,7 +111,9 @@ in
       # the password of a non-root caller by exec'ing the setuid
       # `unix_chkpwd` wrapper from there.  (The systemd `path` option appends
       # /bin + /sbin, so pass the parent dir.)
-       path = webzfsPkgs ++ [ "/run/wrappers" ];
+       path = webzfsPkgs ++ [ 
+          "/run/wrappers"
+        ];
 
       environment = {
         HOME = "/var/lib/webzfs";
