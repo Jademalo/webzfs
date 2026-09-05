@@ -98,6 +98,7 @@ in
 
        path = with pkgs; [ 
           "/run/wrappers" # Necessary for webzfs to run commands as sudo
+          ${config.system.path}
           smartmontools
         ];
 
