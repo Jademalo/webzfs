@@ -9,7 +9,7 @@ let
   pname = "webzfs";
   # Derive the package version from upstream pyproject.toml so it remains
   # the single source of truth for the WebZFS version.
-  version = (lib.importTOML ../pyproject.toml).tool.poetry.version;
+  version = (lib.importTOML ../../pyproject.toml).tool.poetry.version;
 
   # Python dependencies derived from upstream requirements.txt.
   # Version pins are intentionally relaxed: nixpkgs resolves its own
