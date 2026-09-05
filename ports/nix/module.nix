@@ -10,7 +10,7 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = pkgs.webzfs;
+      default = pkgs.callPackage ./package.nix { };
       defaultText = lib.literalExpression "pkgs.webzfs";
       description = ''
         The WebZFS package to use.
@@ -59,13 +59,6 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-
-    nixpkgs.overlays = [
-      # Load derivation and add the package to nixpkgs
-      (final: prev: {
-        webzfs = prev.callPackage ./package.nix { src = self; };
-      })
-    ];
 
     users.users.${cfg.user} = {
       isSystemUser = true;
