@@ -60,6 +60,9 @@ in
 
   config = lib.mkIf cfg.enable {
 
+    # Enable ZFS filesystem support
+    boot.supportedFilesystems = [ "zfs" ];
+
     users.users.${cfg.user} = {
       isSystemUser = true;
       group = cfg.group;
@@ -85,6 +88,8 @@ in
 
     users.groups.${cfg.group} = { };
 
+
+
     systemd.services.webzfs = {
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" "zfs-mount.service" ];
@@ -99,15 +104,15 @@ in
       # /bin + /sbin, so pass the parent dir.)
        path = with pkgs; [
         "/run/wrappers/bin:/usr/local/bin:/usr/bin:/bin"
-/*         zfs
+        #zfs
         smartmontools
         sanoid # also provides the syncoid binary
-        util-linux
-        lsof
-        systemd
-        coreutils
-        gnugrep
-        cronie */
+        #util-linux
+        #lsof
+        #systemd
+        #coreutils
+        #gnugrep
+        #cronie */
       ];
 
       environment = {
