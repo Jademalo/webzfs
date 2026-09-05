@@ -2,6 +2,7 @@
 , buildNpmPackage
 , python3
 , makeWrapper
+, sanoid
 }:
 
 let
@@ -77,6 +78,16 @@ buildNpmPackage {
 
   nativeBuildInputs = [ makeWrapper ];
   buildInputs = [ pythonEnv ];
+
+  postPatch = ''
+    file=$(find . -path "*/services/sanoid.py" -type f)
+    if [ -n "$file" ]; then
+      substituteInPlace "$file" \
+        --replace-fail "COMMON_PATHS = [" "COMMON_PATHS = [
+          '${sanoid}/bin/sanoid',
+          '${sanoid}/bin/syncoid',"
+    fi
+  '';
 
   buildPhase = ''
     runHook preBuild
