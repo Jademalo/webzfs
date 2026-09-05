@@ -59,6 +59,7 @@ Ok... now back to your regularly scheduled README.md...
 - **Linux**: Any distribution with OpenZFS support
 - **FreeBSD**: FreeBSD 13.x and later with OpenZFS
 - **NetBSD**: NetBSD 10.1 and 11.0 (amd64) with OpenZFS
+- **NixOS**: First-class support via the flake's NixOS module (see below)
 
 The application automatically detects the operating system and adapts its behavior accordingly.
 
@@ -177,6 +178,41 @@ Configuration is stored in `/opt/webzfs/.env`. Key settings:
 - `PORT` - Default: 26619
 
 See [BUILD_AND_RUN.md](BUILD_AND_RUN.md) for detailed configuration options.
+
+## NixOS
+
+The repository doubles as a flake that ships a NixOS module. Enabling the
+module is all you need — it wires up the `webzfs` system user, the systemd
+service, and the host integration the app requires on Linux (sudo NOPASSWD
+access to ZFS/SMART/system tooling plus `shadow`/`systemd-journal`/`disk`
+group memberships for PAM auth and read-only log/device access).
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    webzfs.url = "github:kaivalagi/webzfs";
+  };
+
+  outputs = { self, nixpkgs, webzfs, ... }: {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        webzfs.nixosModules.webzfs
+        {
+          services.webzfs = {
+            enable = true;
+            settings.SECRET_KEY = "change-me-in-production";
+            # openFirewall = true;
+          };
+        }
+      ];
+    };
+  };
+}
+```
+
+See [`nix/README.md`](nix/README.md) for the full module documentation.
 
 ## Security Considerations
 
