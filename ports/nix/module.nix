@@ -63,7 +63,7 @@ in
     # Enable ZFS filesystem support
     boot.supportedFilesystems = [ "zfs" ];
     # Enable Sanoid
-    service.sanoid.enable = true;
+    services.sanoid.enable = true;
 
     users.users.${cfg.user} = {
       isSystemUser = true;
