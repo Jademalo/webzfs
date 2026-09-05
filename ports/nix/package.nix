@@ -2,7 +2,7 @@
 , buildNpmPackage
 , python3
 , makeWrapper
-, src ? ./..
+, src ? ./../..
 }:
 
 let

@@ -1,0 +1,50 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/debian
+{
+	"name": "Remote NixOS Configuration",
+	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
+	"image": "mcr.microsoft.com/devcontainers/base:trixie",
+/* 	"containerEnv": {
+		// Point to the private key for nixos-builder as a fallback to bitwarden
+    	"NIX_SSHOPTS": "-i ./secrets/nixos-builder"
+  	}, */
+	"features": {
+		// Install the nix devcontainer feature, as well as packages for the ide and building nixos
+		"ghcr.io/devcontainers/features/nix": {
+			"packages": [
+				"nixd", 
+				"nixfmt", 
+				"nixos-rebuild-ng",
+				"openssh",
+				"git-crypt"
+			]
+		}
+	},
+
+	"customizations": {
+    "vscode": {
+	  // Add nix-ide and the tasks extension
+      "extensions": [
+		"jnoortheen.nix-ide",
+		"actboy168.tasks",
+		"Exelord.git-commits"
+	  ],
+	  "settings": {
+		// Add a terminal that connects to the server
+		"terminal.integrated.profiles.linux": {
+			"Remote Server": {
+			"path": "ssh",
+			"args": ["jademalo@scottcloud.co.uk"],
+			"icon": "terminal-bash"
+			}
+		},
+		//Set that terminal as the default
+		"terminal.integrated.defaultProfile.linux": "Remote Server",
+		// Run tasks with the old default shell
+		"terminal.integrated.automationProfile.linux": {
+          "path": "/usr/bin/zsh"
+        }
+	  }
+    }
+  }
+}
