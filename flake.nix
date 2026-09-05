@@ -12,7 +12,7 @@
     }:
     {
 
-      nixosModules = {
+      nixosModules = rec {
         webzfs = import ./ports/nix/module.nix;
         default = { ... }: {
           imports = [ webzfs ];
