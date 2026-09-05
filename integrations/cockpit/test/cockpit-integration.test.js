@@ -476,6 +476,12 @@ test("audits Fleet routes and pool modal compatibility", () => {
     assert.match(createTemplate, /window\.submitCreatePool = function\(\)/);
     assert.match(createTemplate, /showPoolCreationProgress\(\)/);
     assert.match(createTemplate, /form\.requestSubmit\(\)/);
+    assert.match(createTemplate, /\.disk-card\[data-status="active"\]::before/);
+    assert.match(createTemplate, /\.disk-card\[data-status="labeled"\]::before/);
+    assert.match(createTemplate, /background-image: repeating-linear-gradient/);
+    assert.match(createTemplate, /diskEl\.dataset\.status = 'available'/);
+    assert.match(createTemplate, /diskEl\.dataset\.isSystem === 'true'/);
+    assert.match(createTemplate, /data-detected-status-badge/);
 });
 
 test("routes fetch requests through the bridge and parses JSON", async () => {

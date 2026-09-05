@@ -648,35 +648,16 @@ class DiskUtilsService:
                         # Check critical mount points
                         critical_mounts = ['/', '/boot', '/boot/efi', '/efi', '/home', '/usr', '/var']
                         if target in critical_mounts:
-                            # Handle /dev/mapper/ devices
-                            if source.startswith('/dev/mapper/') or source.startswith('/dev/dm-'):
-                                # Try to find the underlying physical device
-                                try:
-                                    # Use dmsetup to trace back to physical device
-                                    dm_result = subprocess.run(
-                                        ['dmsetup', 'deps', '-o', 'devname', source],
-                                        capture_output=True,
-                                        text=True,
-                                        check=False
-                                    )
-                                    
-                                    if dm_result.returncode == 0:
-                                        # Extract device names from output
-                                        # Output format: "1 dependencies : (sda1)"
-                                        import re
-                                        deps = re.findall(r'\(([^)]+)\)', dm_result.stdout)
-                                        for dep in deps:
-                                            base_disk = self._get_base_disk_name_linux(dep)
-                                            if base_disk and base_disk not in system_disks:
-                                                system_disks[base_disk] = f"OS disk (mounted: {target})"
-                                except Exception:
-                                    pass
-                            elif source.startswith('/dev/'):
-                                # Regular device
+                            physical_disks = self._get_physical_disks_linux(source)
+                            if not physical_disks and source.startswith('/dev/'):
                                 device = source.replace('/dev/', '')
                                 base_disk = self._get_base_disk_name_linux(device)
-                                if base_disk and base_disk not in system_disks:
-                                    system_disks[base_disk] = f"OS disk (mounted: {target})"
+                                if base_disk:
+                                    physical_disks = [base_disk]
+
+                            for disk_name in physical_disks:
+                                if disk_name not in system_disks:
+                                    system_disks[disk_name] = f"OS disk (mounted: {target})"
         except Exception:
             pass
         
@@ -774,6 +755,26 @@ class DiskUtilsService:
             return match.group(1)
         
         return None
+
+    def _get_physical_disks_linux(self, device_path: str) -> List[str]:
+        """Return physical disk ancestors for a Linux block device path."""
+        try:
+            result = subprocess.run(
+                ['lsblk', '-n', '-s', '-o', 'KNAME,TYPE', device_path],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            if result.returncode != 0:
+                return []
+
+            return [
+                parts[0]
+                for line in result.stdout.splitlines()
+                if len(parts := line.split()) >= 2 and parts[1] == 'disk'
+            ]
+        except Exception:
+            return []
     
     def _get_base_disk_name_freebsd(self, device: str) -> Optional[str]:
         """
