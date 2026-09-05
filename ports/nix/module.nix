@@ -10,7 +10,7 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = pkgs.webzfs;
+      default = pkgs.callPackage ./package.nix { };
       defaultText = lib.literalExpression "pkgs.webzfs";
       description = ''
         The WebZFS package to use.
@@ -59,55 +59,36 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+
+    # Enable ZFS filesystem support
+    boot.supportedFilesystems = [ "zfs" ];
+    # Enable Sanoid
+    services.sanoid.enable = true;
+
     users.users.${cfg.user} = {
       isSystemUser = true;
       group = cfg.group;
       description = "WebZFS service user";
       extraGroups = [
-        # WebZFS's web login authenticates against PAM as this unprivileged
-        # user.  pam_unix delegates password verification for a non-root
-        # caller to the setuid `unix_chkpwd` helper, which deliberately only
-        # ever reads /etc/shadow with the *caller's* credentials -- so the
-        # service user must be able to read it to verify arbitrary accounts.
-        # NixOS already ships the `shadow` group with /etc/shadow mode
-        # 0640 root:shadow; joining it is all that is needed.  Without this,
-        # all logins fail with "pam_unix(login:auth): authentication failure"
-        # despite the correct password.
+        # Add to shadow group for PAM authentication
         "shadow"
-        # Read access to the systemd journal for the log readout, so
-        # `journalctl` works without sudo.
-        "systemd-journal"
-        # Raw block device read access so `blkid` works without sudo.
-        "disk"
       ];
     };
 
     users.groups.${cfg.group} = { };
 
+
     systemd.services.webzfs = {
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" "zfs-mount.service" ];
 
-      # WebZFS shells out to ZFS/SMART/system tooling as the unprivileged
-      # service user.  Give the service a PATH containing those tools both
-      # for direct execution and so `sudo` can resolve them under
-      # secure_path.  `/run/wrappers/bin` must also be present: python-pam
-      # authenticates against the `login` PAM service, and pam_unix verifies
-      # the password of a non-root caller by exec'ing the setuid
-      # `unix_chkpwd` wrapper from there.  (The systemd `path` option appends
-      # /bin + /sbin, so pass the parent dir.)
-      path = with pkgs; [
-        "/run/wrappers"
-        zfs
-        smartmontools
-        sanoid # also provides the syncoid binary
-        util-linux
-        lsof
-        systemd
-        coreutils
-        gnugrep
-        cronie
-      ];
+       path = with pkgs; [ 
+          "/run/wrappers" # Necessary for webzfs to run commands as sudo
+          "${config.system.path}" # Put system packages in service environment
+          lsof
+          smartmontools
+          #sanoid # Not necessary due to the package itself adding it to the store for the hardcoded path
+        ];
 
       environment = {
         HOME = "/var/lib/webzfs";
@@ -137,29 +118,65 @@ in
       '';
     };
 
-    # Restricted NOPASSWD sudo rules mirroring upstream's documented list, on
-    # the NixOS binary paths.  secure_path is pinned to /run/current-system/sw
-    # /bin so the executed command matches these rules regardless of the
-    # caller's PATH or rebuild churn (the symlink target changes, the path
-    # does not).  Read-only access that is covered by group membership
-    # (journalctl via `systemd-journal`) or works unprivileged (lsblk) is
-    # intentionally not in sudo.
-    security.sudo.enable = true;
-    security.sudo.extraConfig = ''
-      Defaults:${cfg.user} secure_path="/run/current-system/sw/bin:/run/current-system/sw/sbin"
-
-      # WebZFS sudo permissions
-      ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/zpool, /run/current-system/sw/bin/zfs, /run/current-system/sw/bin/zdb -l *
-      ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/smartctl
-      ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/lsof, /run/current-system/sw/bin/lslocks
-      ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/sanoid, /run/current-system/sw/bin/syncoid
-      ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/systemctl
-      ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/crontab
-      ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/tee /etc/systemd/system/webzfs-syncoid-job-*, /run/current-system/sw/bin/rm -f /etc/systemd/system/webzfs-syncoid-job-*
-      ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/tee /etc/systemd/system/webzfs-task-*, /run/current-system/sw/bin/rm -f /etc/systemd/system/webzfs-task-*
-      ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/cat, /run/current-system/sw/bin/tee, /run/current-system/sw/bin/mkdir
-      ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/dmesg
-    '';
+    # NOPASSWD config as per sudoers file config in install_linux.sh
+    security.sudo = {
+      enable = true;
+      extraRules = [
+        {
+          users = [ cfg.user ];
+          commands = map (cmd: { command = cmd; options = [ "NOPASSWD" ]; }) [
+            # ZFS commands
+            "${config.system.path}/bin/zpool"
+            "${config.system.path}/bin/zfs"
+            "${config.system.path}/bin/zdb -l *"
+            # SMART monitoring
+            "${pkgs.smartmontools}/bin/smartctl"
+            # Disk utilities
+            "${config.system.path}/bin/lsblk"
+            "${config.system.path}/bin/blkid"
+            # Open file / lock inspection (pool export busy investigation)
+            "${pkgs.lsof}/bin/lsof"
+            "${config.system.path}/bin/lslocks"
+            # Sanoid/Syncoid
+            "${pkgs.sanoid}/bin/sanoid"
+            "${pkgs.sanoid}/bin/syncoid"
+            # Service management (systemctl for system services page)
+            "${config.system.path}/bin/systemctl"
+            # Crontab editing
+            #"${config.system.path}/bin/crontab"
+            # Scheduled syncoid job timers.
+            # Unit files are created and edited with "sudo tee" (covered by the
+            # general tee entry below) and enabled/disabled/reloaded with
+            # "sudo systemctl" (covered by the systemctl entry above). The explicit
+            # tee entries here document that intent and keep timer management
+            # working even if the general tee entry is ever narrowed. rm is
+            # restricted to WebZFS-owned unit files only.
+            "${config.system.path}/bin/tee /etc/systemd/system/webzfs-syncoid-job-*"
+            "${config.system.path}/bin/rm -f /etc/systemd/system/webzfs-syncoid-job-*"
+            # Unified Scheduling Hub timers. All scheduled task types (scrub, SMART
+            # self-test, health check, and replication) use the webzfs-task-* unit
+            # naming scheme managed by services/job_scheduler.py.
+            "${config.system.path}/bin/tee /etc/systemd/system/webzfs-task-*"
+            "${config.system.path}/bin/rm -f /etc/systemd/system/webzfs-task-*"
+            # File editing (for config files like smartd.conf, sanoid.conf)
+            "${config.system.path}/bin/cat"
+            "${config.system.path}/bin/tee"
+            "${config.system.path}/bin/mkdir"
+            # Read system journal and plain-text syslog files for the
+            # Observability -> System Log page. journalctl needs sudo (or
+            # systemd-journal group) on most distros. tail covers Debian/Ubuntu
+            # (/var/log/syslog) and old RHEL (/var/log/messages).
+            "${config.system.path}/bin/journalctl"
+            "${config.system.path}/bin/tail"
+            # Support bundle log collection. Reading /var/log/messages and
+            # /var/log/syslog (typically mode 640 root:adm) and the kernel ring
+            # buffer requires elevated privileges for the unprivileged webzfs user.
+            "${config.system.path}/bin/grep"
+            "${config.system.path}/bin/dmesg"      
+          ];
+        }
+      ];
+    };
 
     networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [ cfg.port ];
   };
