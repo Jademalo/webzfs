@@ -79,6 +79,7 @@ buildNpmPackage {
   nativeBuildInputs = [ makeWrapper ];
   buildInputs = [ pythonEnv ];
 
+  # Add the nix store path for sanoid and syncoid to the paths list
   postPatch = ''
     file=$(find . -path "*/services/sanoid.py" -type f)
     if [ -n "$file" ]; then
