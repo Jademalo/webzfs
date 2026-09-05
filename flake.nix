@@ -11,7 +11,7 @@
       forAllSystems = nixpkgs.lib.genAttrs systems;
 
       overlay = final: prev: {
-        webzfs = final.callPackage ./nix/package.nix { src = self; };
+        webzfs = final.callPackage ./ports/nix/package.nix { src = self; };
       };
     in
     {
@@ -25,17 +25,10 @@
         }
       );
 
-      nixosModules.webzfs = import ./nix/module.nix;
+      nixosModules = {
+        webzfs = import ./ports/nix/module.nix;
+      };
 
       overlays.default = overlay;
-
-      devShells = forAllSystems (system:
-        let
-          pkgs = import nixpkgs { inherit system; };
-        in
-        {
-          default = import ./nix/dev-shell.nix { inherit pkgs; };
-        }
-      );
     };
 }
