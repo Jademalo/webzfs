@@ -157,7 +157,7 @@ in
         }
       ]; */
       extraConfig = ''
-        Defaults:${cfg.user} secure_path="/run/wrappers/bin:/run/current-system/sw/bin:/run/current-system/sw/sbin"
+        Defaults:${cfg.user} secure_path="/run/wrappers:/run/current-system/sw/bin:/run/current-system/sw/sbin"
 
         # WebZFS sudo permissions
         ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/zpool, /run/current-system/sw/bin/zfs, /run/current-system/sw/bin/zdb -l *
