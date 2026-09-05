@@ -64,6 +64,27 @@ sudo systemctl enable --now webzfs
 The module creates a dedicated `webzfs` user/group and runs the service under
 `systemd` with state kept in `/var/lib/webzfs`.
 
+### What the module sets up for you
+
+The module is self-contained: enabling `services.webzfs.enable` is all you
+need, there are no further dependencies to configure. Under the hood it wires
+up the full host integration required for WebZFS to actually work on NixOS:
+
+- **Privileged command access** — `sudo` NOPASSWD rules for the commands that
+  genuinely need root (`zpool`, `zfs`, `zdb -l *`, `smartctl`, `lsof`/
+  `lslocks`, `sanoid`/`syncoid`, `systemctl`, `crontab`, `tee`/`rm` for
+  WebZFS-owned systemd unit files, file editing via `cat`/`tee`/`mkdir`, and
+  `dmesg` for support bundles). `secure_path` is pinned to
+  `/run/current-system/sw/bin` so the rules resolve across rebuilds.
+- **Group memberships instead of sudo for read-only tools** — the `webzfs`
+  user joins `shadow` (PAM login against `/etc/shadow`), `systemd-journal`
+  (`journalctl` log readout), and `disk` (`blkid` block device reads); `lsblk`
+  needs no privilege at all.
+- **PATH** — the service gets a PATH with `/run/wrappers`, `zfs`,
+  `smartmontools`, `sanoid`/`syncoid`, `util-linux`, `lsof`, `systemd`,
+  `coreutils`, `gnugrep`, and `cronie`, so both direct tool execution and
+  sudo's secure_path resolve correctly.
+
 ### Module options
 
 | Option            | Type        | Default         | Description                                    |
