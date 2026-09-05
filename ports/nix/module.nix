@@ -3,15 +3,6 @@
 let
   cfg = config.services.webzfs;
   webzfsDir = "${cfg.package}/opt/webzfs";
-
-  # Define all binaries required specifically by WebZFS
-  webzfsPkgs = with pkgs; [
-    zfs
-    smartmontools
-    sanoid
-    cronie
-  ];
-
 in
 {
   options.services.webzfs = {
@@ -111,8 +102,9 @@ in
       # the password of a non-root caller by exec'ing the setuid
       # `unix_chkpwd` wrapper from there.  (The systemd `path` option appends
       # /bin + /sbin, so pass the parent dir.)
-       path = webzfsPkgs ++ [ 
+       path = with pkgs; [ 
           "/run/wrappers"
+          smartmontools
         ];
 
       environment = {
@@ -136,12 +128,6 @@ in
         WorkingDirectory = webzfsDir;
         Restart = "always";
         RestartSec = "5";
-        BindReadOnlyPaths = [
-          "${lib.getExe' pkgs.sanoid "syncoid"}:/usr/local/bin/syncoid"
-          "${lib.getExe pkgs.sanoid}:/usr/local/bin/sanoid"
-          "${lib.getExe pkgs.sanoid}:/usr/bin/sanoid"
-          "${lib.getExe' pkgs.sanoid "syncoid"}:/usr/bin/syncoid"
-        ];
       };
 
       script = ''
@@ -159,7 +145,7 @@ in
     # intentionally not in sudo.
     security.sudo = {
       enable = true;
-      extraRules = [
+      /* extraRules = [
         {
           users = [ "webzfs" ];
           commands = [
@@ -169,9 +155,9 @@ in
             }
           ];
         }
-      ];
-/*       extraConfig = ''
-        Defaults:${cfg.user} secure_path="${pkgs.sanoid}:${pkgs.smartmontools}:/run/wrappers/bin:/run/current-system/sw/bin:/run/current-system/sw/sbin"
+      ]; */
+      extraConfig = ''
+        Defaults:${cfg.user} secure_path="/run/wrappers/bin:/run/current-system/sw/bin:/run/current-system/sw/sbin"
 
         # WebZFS sudo permissions
         ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/zpool, /run/current-system/sw/bin/zfs, /run/current-system/sw/bin/zdb -l *
@@ -185,7 +171,7 @@ in
 
         ${cfg.user} ALL=(ALL) NOPASSWD: ${pkgs.smartmontools}/bin/smartctl
         ${cfg.user} ALL=(ALL) NOPASSWD: ${pkgs.sanoid}/bin/sanoid, ${pkgs.sanoid}/bin/syncoid
-      ''; */
+      '';
     };
 
     networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [ cfg.port ];
