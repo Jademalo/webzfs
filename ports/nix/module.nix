@@ -99,7 +99,7 @@ in
       # /bin + /sbin, so pass the parent dir.)
 /*        path = with pkgs; [
         "/run/wrappers/bin:/usr/local/bin:/usr/bin:/bin"
-/*         zfs
+        zfs
         smartmontools
         sanoid # also provides the syncoid binary
         util-linux
@@ -107,7 +107,7 @@ in
         systemd
         coreutils
         gnugrep
-        cronie */
+        cronie
       ]; */
 
       environment = {
