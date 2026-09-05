@@ -97,9 +97,9 @@ in
       # the password of a non-root caller by exec'ing the setuid
       # `unix_chkpwd` wrapper from there.  (The systemd `path` option appends
       # /bin + /sbin, so pass the parent dir.)
-/*       path = with pkgs; [
-        "/run/wrappers"
-        zfs
+       path = with pkgs; [
+        "/run/wrappers/bin:/usr/local/bin:/usr/bin:/bin"
+/*         zfs
         smartmontools
         sanoid # also provides the syncoid binary
         util-linux
@@ -107,12 +107,11 @@ in
         systemd
         coreutils
         gnugrep
-        cronie
-      ]; */
+        cronie */
+      ];
 
       environment = {
         HOME = "/var/lib/webzfs";
-        PATH = "/run/wrappers/bin:/usr/local/bin:/usr/bin:/bin";
         PYTHONPATH = webzfsDir;
         HOST = cfg.host;
         PORT = toString cfg.port;
