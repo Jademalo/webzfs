@@ -140,7 +140,7 @@ in
 
       script = ''
         echo "Current PATH is: $PATH"
-        exec ${cfg.package}/bin/webzfs
+        exec ${cfg.package}/bin/webzfs --debug
       '';
     };
 
