@@ -439,7 +439,7 @@ test("audits every template form for Cockpit submit compatibility", () => {
     assert.match(encodedForms[0].tag, /\/utils\/settings\/backup\/inspect/);
 });
 
-test("audits Fleet routes and disk-check modal compatibility", () => {
+test("audits Fleet routes and pool modal compatibility", () => {
     const projectRoot = path.resolve(__dirname, "../../..");
     const fleetTemplate = fs.readFileSync(
         path.join(projectRoot, "templates/fleet/index.jinja"),
@@ -468,6 +468,14 @@ test("audits Fleet routes and disk-check modal compatibility", () => {
         assert.match(template, /id="disk-check-error-state" style="display: none;"/);
         assert.match(template, /dialog\.style\.display = 'none'/);
     });
+
+    assert.match(createTemplate, /id="create-pool-form"[^>]*hx-boost="false"/s);
+    assert.match(createTemplate, /id="pool-create-progress-overlay"[\s\S]*style="display: none;"/);
+    assert.match(createTemplate, /id="pool-create-progress-pool-name"/);
+    assert.match(createTemplate, /{% set confirm_action = 'submitCreatePool\(\)' %}/);
+    assert.match(createTemplate, /window\.submitCreatePool = function\(\)/);
+    assert.match(createTemplate, /showPoolCreationProgress\(\)/);
+    assert.match(createTemplate, /form\.requestSubmit\(\)/);
 });
 
 test("routes fetch requests through the bridge and parses JSON", async () => {

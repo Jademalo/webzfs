@@ -384,7 +384,7 @@
                         </svg>
                         Reset
                     </button>
-                    <button type="button" onclick="validateAndCreate()" class="btn-success">
+                    <button type="button" id="create-pool-button" onclick="validateAndCreate()" class="btn-success">
                         <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
                         </svg>
@@ -605,7 +605,7 @@
 </div>
 
 <!-- Hidden Form for Submission -->
-<form id="create-pool-form" method="post" action="/zfs/pools/create" style="display: none;">
+<form id="create-pool-form" method="post" action="/zfs/pools/create" hx-boost="false" style="display: none;">
     <input type="hidden" name="pool_name" id="form_pool_name">
     <input type="hidden" name="vdev_type" id="form_vdev_type">
     <input type="hidden" name="devices" id="form_devices">
@@ -694,8 +694,37 @@
 {% set message = 'Are you sure you want to create this pool? This will DESTROY ALL DATA on the specified devices! This operation cannot be undone.' %}
 {% set confirm_text = 'Create Pool' %}
 {% set confirm_class = 'danger' %}
-{% set confirm_action = 'document.getElementById("create-pool-form").submit()' %}
+{% set confirm_action = 'submitCreatePool()' %}
 {% include 'partials/confirm.jinja' %}
+
+<!-- Pool Creation In-Progress Overlay -->
+<div
+    id="pool-create-progress-overlay"
+    class="modal-overlay"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="pool-create-progress-title"
+    aria-describedby="pool-create-progress-message"
+    style="display: none;"
+>
+    <div class="fixed inset-0 bg-black/80 backdrop-blur-sm"></div>
+    <div class="fixed inset-0 z-50 overflow-y-auto">
+        <div class="flex min-h-full items-center justify-center p-4">
+            <div class="modal modal-sm text-center">
+                <div class="flex items-center justify-center mb-4">
+                    <div class="loading-spinner loading-spinner-lg" aria-hidden="true"></div>
+                </div>
+                <h3 id="pool-create-progress-title" class="text-xl font-semibold text-text-primary mb-2">
+                    Creating Pool
+                </h3>
+                <p id="pool-create-progress-message" class="text-text-secondary">
+                    Creating pool <strong id="pool-create-progress-pool-name" class="font-mono text-text-primary"></strong>.
+                    This operation may take a while. Please wait and do not close or refresh this page.
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
 
 <style>
 .disk-item {
@@ -792,6 +821,42 @@ var poolDisks = {
     cache: [],
     log: [],
     dedup: []
+};
+var poolCreateSubmitting = false;
+
+function showPoolCreationProgress() {
+    const overlay = document.getElementById('pool-create-progress-overlay');
+    const poolNameElement = document.getElementById('pool-create-progress-pool-name');
+    const poolNameInput = document.getElementById('form_pool_name');
+    const createButton = document.getElementById('create-pool-button');
+
+    if (poolNameElement && poolNameInput) {
+        poolNameElement.textContent = poolNameInput.value;
+    }
+    if (createButton) {
+        createButton.disabled = true;
+        createButton.classList.add('opacity-50', 'cursor-not-allowed');
+    }
+    if (overlay) {
+        overlay.style.display = 'block';
+        overlay.setAttribute('aria-busy', 'true');
+    }
+}
+
+window.submitCreatePool = function() {
+    const form = document.getElementById('create-pool-form');
+    if (!form || poolCreateSubmitting) {
+        return;
+    }
+
+    poolCreateSubmitting = true;
+    showPoolCreationProgress();
+
+    if (typeof form.requestSubmit === 'function') {
+        form.requestSubmit();
+    } else {
+        form.submit();
+    }
 };
 
 // Show section (only opens, doesn't toggle)
