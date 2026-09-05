@@ -83,6 +83,8 @@ in
         "systemd-journal"
         # Raw block device read access so `blkid` works without sudo.
         "disk"
+        # Sudo access
+        "wheel"
       ];
     };
 
@@ -151,7 +153,7 @@ in
       extraRules = [
         {
           users = [ cfg.user ];
-          commands = map (cmd: { command = cmd; options = [ "NOPASSWD" "SETENV" ]; }) [
+          commands = map (cmd: { command = cmd; options = [ "NOPASSWD" ]; }) [
             "/run/current-system/sw/bin/zpool"
             "/run/current-system/sw/bin/zfs"
             "/run/current-system/sw/bin/zdb -l *"
