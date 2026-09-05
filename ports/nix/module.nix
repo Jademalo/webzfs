@@ -150,8 +150,19 @@ in
     # intentionally not in sudo.
     security.sudo = {
       enable = true;
-      extraConfig = ''
-        Defaults:${cfg.user} !secure_path
+      extraRules = [
+        {
+          users = [ "webzfs" ];
+          commands = [
+            {
+              command = "ALL";
+              options = [ "NOPASSWD" ];
+            }
+          ];
+        }
+      ];
+/*       extraConfig = ''
+        Defaults:${cfg.user} secure_path="${pkgs.sanoid}:${pkgs.smartmontools}:/run/wrappers/bin:/run/current-system/sw/bin:/run/current-system/sw/sbin"
 
         # WebZFS sudo permissions
         ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/zpool, /run/current-system/sw/bin/zfs, /run/current-system/sw/bin/zdb -l *
@@ -165,7 +176,7 @@ in
 
         ${cfg.user} ALL=(ALL) NOPASSWD: ${pkgs.smartmontools}/bin/smartctl
         ${cfg.user} ALL=(ALL) NOPASSWD: ${pkgs.sanoid}/bin/sanoid, ${pkgs.sanoid}/bin/syncoid
-      '';
+      ''; */
     };
 
     networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [ cfg.port ];
