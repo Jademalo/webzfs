@@ -103,7 +103,7 @@ in
       # `unix_chkpwd` wrapper from there.  (The systemd `path` option appends
       # /bin + /sbin, so pass the parent dir.)
        path = with pkgs; [
-        "/run/wrappers/bin:/usr/local/bin:/usr/bin:/bin"
+        "/run/wrappers"
         #zfs
         smartmontools
         sanoid # also provides the syncoid binary
@@ -158,15 +158,16 @@ in
 
         # WebZFS sudo permissions
         ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/zpool, /run/current-system/sw/bin/zfs, /run/current-system/sw/bin/zdb -l *
-        ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/smartctl
         ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/lsof, /run/current-system/sw/bin/lslocks
-        ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/sanoid, /run/current-system/sw/bin/syncoid
         ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/systemctl
         ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/crontab
         ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/tee /etc/systemd/system/webzfs-syncoid-job-*, /run/current-system/sw/bin/rm -f /etc/systemd/system/webzfs-syncoid-job-*
         ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/tee /etc/systemd/system/webzfs-task-*, /run/current-system/sw/bin/rm -f /etc/systemd/system/webzfs-task-*
         ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/cat, /run/current-system/sw/bin/tee, /run/current-system/sw/bin/mkdir
         ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/dmesg
+
+        ${cfg.user} ALL=(ALL) NOPASSWD: ${pkgs.smartmontools}/bin/smartctl
+        ${cfg.user} ALL=(ALL) NOPASSWD: ${pkgs.sanoid}/bin/sanoid, ${pkgs.sanoid}/bin/syncoid
       '';
     };
 
