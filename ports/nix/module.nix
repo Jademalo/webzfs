@@ -62,6 +62,8 @@ in
 
     # Enable ZFS filesystem support
     boot.supportedFilesystems = [ "zfs" ];
+    # Enable Sanoid
+    service.sanoid.enable = true;
 
     users.users.${cfg.user} = {
       isSystemUser = true;
@@ -83,13 +85,10 @@ in
         "systemd-journal"
         # Raw block device read access so `blkid` works without sudo.
         "disk"
-        # Sudo access
-        "wheel"
       ];
     };
 
     users.groups.${cfg.group} = { };
-
 
 
     systemd.services.webzfs = {
@@ -97,8 +96,8 @@ in
       after = [ "network.target" "zfs-mount.service" ];
 
        path = with pkgs; [ 
-          "/run/wrappers" # Necessary for webzfs to run commands as sudo
-          "${config.system.path}"
+          #"/run/wrappers" # Necessary for webzfs to run commands as sudo
+          "${config.system.path}" # Put system packages in service environment
           smartmontools
         ];
 
@@ -140,17 +139,6 @@ in
     # intentionally not in sudo.
     security.sudo = {
       enable = true;
-      /* extraRules = [
-        {
-          users = [ "webzfs" ];
-          commands = [
-            {
-              command = "ALL";
-              options = [ "NOPASSWD" ];
-            }
-          ];
-        }
-      ]; */
       extraRules = [
         {
           users = [ cfg.user ];
@@ -176,23 +164,6 @@ in
           ];
         }
       ];
-/*       extraConfig = ''
-        Defaults:${cfg.user} secure_path="/run/wrappers/bin:/run/current-system/sw/bin:/run/current-system/sw/sbin"
-
-        # WebZFS sudo permissions
-        ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/zpool, /run/current-system/sw/bin/zfs, /run/current-system/sw/bin/zdb -l *
-        ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/lsof, /run/current-system/sw/bin/lslocks
-        ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/systemctl
-        ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/crontab
-        ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/tee /etc/systemd/system/webzfs-syncoid-job-*, /run/current-system/sw/bin/rm -f /etc/systemd/system/webzfs-syncoid-job-*
-        ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/tee /etc/systemd/system/webzfs-task-*, /run/current-system/sw/bin/rm -f /etc/systemd/system/webzfs-task-*
-        ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/cat, /run/current-system/sw/bin/tee, /run/current-system/sw/bin/mkdir
-        ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/dmesg
-
-        ${cfg.user} ALL=(ALL) NOPASSWD: ${pkgs.smartmontools}/bin/smartctl
-        ${cfg.user} ALL=(ALL) NOPASSWD: ${pkgs.sanoid}/bin/sanoid, ${pkgs.sanoid}/bin/syncoid
-      ''; */
-    };
 
     networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [ cfg.port ];
   };
