@@ -102,10 +102,10 @@ in
       # the password of a non-root caller by exec'ing the setuid
       # `unix_chkpwd` wrapper from there.  (The systemd `path` option appends
       # /bin + /sbin, so pass the parent dir.)
-       path = with pkgs; [ 
+/*        path = with pkgs; [ 
           "/run/wrappers"
           smartmontools
-        ];
+        ]; */
 
       environment = {
         HOME = "/var/lib/webzfs";
