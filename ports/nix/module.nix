@@ -6,7 +6,7 @@ let
 
   # Define all binaries required specifically by WebZFS
   webzfsPkgs = with pkgs; [
-    zfs
+    #zfs
     smartmontools
     sanoid
   ];
@@ -151,7 +151,7 @@ in
     security.sudo = {
       enable = true;
       extraConfig = ''
-        Defaults:${cfg.user} secure_path="${lib.makeBinPath webzfsPkgs}:/run/wrappers/bin"
+        Defaults:${cfg.user} secure_path="${lib.makeBinPath webzfsPkgs}:/run/wrappers/bin:/run/current-system/sw/bin"
 
         # WebZFS sudo permissions
         ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/zpool, /run/current-system/sw/bin/zfs, /run/current-system/sw/bin/zdb -l *
