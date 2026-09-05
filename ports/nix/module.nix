@@ -125,13 +125,6 @@ in
         SETTINGS_MODULE = "config.settings.base";
         SECRET_KEY = cfg.settings.SECRET_KEY or "changeme-in-production";
         WEBZFS_STATE_DIR = "/var/lib/webzfs";
-
-        # Force Python to flush stdout/stderr immediately to journalctl
-        PYTHONUNBUFFERED = "1";
-
-        # Enable verbose Django backend debugging
-        DEBUG = "True";
-        LOG_LEVEL = "DEBUG";
       } // cfg.settings;
 
       serviceConfig = {
@@ -143,6 +136,12 @@ in
         WorkingDirectory = webzfsDir;
         Restart = "always";
         RestartSec = "5";
+        BindReadOnlyPaths = [
+          "${lib.getExe' pkgs.sanoid "syncoid"}:/usr/local/bin/syncoid"
+          "${lib.getExe pkgs.sanoid}:/usr/local/bin/sanoid"
+          "${lib.getExe pkgs.sanoid}:/usr/bin/sanoid"
+          "${lib.getExe' pkgs.sanoid "syncoid"}:/usr/bin/syncoid"
+        ];
       };
 
       script = ''
