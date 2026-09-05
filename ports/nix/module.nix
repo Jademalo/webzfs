@@ -151,7 +151,7 @@ in
     security.sudo = {
       enable = true;
       extraConfig = ''
-        Defaults:${cfg.user} secure_path="${lib.makeBinPath webzfsPkgs}:/run/wrappers/bin:/run/current-system/sw/bin"
+        Defaults:${cfg.user} secure_path="${pkgs.sanoid}:${pkgs.smartmontools}:/run/wrappers/bin:/run/current-system/sw/bin:/run/current-system/sw/sbin"
 
         # WebZFS sudo permissions
         ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/zpool, /run/current-system/sw/bin/zfs, /run/current-system/sw/bin/zdb -l *
