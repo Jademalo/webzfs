@@ -3,6 +3,14 @@
 let
   cfg = config.services.webzfs;
   webzfsDir = "${cfg.package}/opt/webzfs";
+
+  # Define all binaries required specifically by WebZFS
+  webzfsPkgs = with pkgs; [
+    zfs
+    smartmontools
+    sanoid
+  ];
+
 in
 {
   options.services.webzfs = {
@@ -102,18 +110,7 @@ in
       # the password of a non-root caller by exec'ing the setuid
       # `unix_chkpwd` wrapper from there.  (The systemd `path` option appends
       # /bin + /sbin, so pass the parent dir.)
-       path = with pkgs; [
-        "/run/wrappers"
-        #zfs
-        smartmontools
-        sanoid # also provides the syncoid binary
-        #util-linux
-        #lsof
-        #systemd
-        #coreutils
-        #gnugrep
-        #cronie */
-      ];
+       path = webzfsPkgs ++ [ "/run/wrappers" ];
 
       environment = {
         HOME = "/var/lib/webzfs";
@@ -154,7 +151,7 @@ in
     security.sudo = {
       enable = true;
       extraConfig = ''
-        Defaults:${cfg.user} secure_path="/run/current-system/sw/bin:/run/current-system/sw/sbin"
+        Defaults:${cfg.user} secure_path="${lib.makeBinPath webzfsPkgs}:/run/wrappers/bin"
 
         # WebZFS sudo permissions
         ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/zpool, /run/current-system/sw/bin/zfs, /run/current-system/sw/bin/zdb -l *
