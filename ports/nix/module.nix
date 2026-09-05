@@ -102,10 +102,10 @@ in
       # the password of a non-root caller by exec'ing the setuid
       # `unix_chkpwd` wrapper from there.  (The systemd `path` option appends
       # /bin + /sbin, so pass the parent dir.)
-/*        path = with pkgs; [ 
-          "/run/wrappers"
-          smartmontools
-        ]; */
+       path = with pkgs; [ 
+          "/run/wrappers" # Necessary for webzfs to run commands as sudo
+          #smartmontools
+        ];
 
       environment = {
         HOME = "/var/lib/webzfs";
@@ -157,7 +157,7 @@ in
         }
       ]; */
       extraConfig = ''
-        Defaults:${cfg.user} secure_path="/run/wrappers:/run/current-system/sw/bin:/run/current-system/sw/sbin"
+        Defaults:${cfg.user} secure_path="/run/wrappers/bin:/run/current-system/sw/bin:/run/current-system/sw/sbin"
 
         # WebZFS sudo permissions
         ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/zpool, /run/current-system/sw/bin/zfs, /run/current-system/sw/bin/zdb -l *
