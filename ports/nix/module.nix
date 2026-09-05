@@ -94,17 +94,9 @@ in
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" "zfs-mount.service" ];
 
-      # WebZFS shells out to ZFS/SMART/system tooling as the unprivileged
-      # service user.  Give the service a PATH containing those tools both
-      # for direct execution and so `sudo` can resolve them under
-      # secure_path.  `/run/wrappers/bin` must also be present: python-pam
-      # authenticates against the `login` PAM service, and pam_unix verifies
-      # the password of a non-root caller by exec'ing the setuid
-      # `unix_chkpwd` wrapper from there.  (The systemd `path` option appends
-      # /bin + /sbin, so pass the parent dir.)
        path = with pkgs; [ 
           "/run/wrappers" # Necessary for webzfs to run commands as sudo
-          #smartmontools
+          smartmontools
         ];
 
       environment = {
@@ -156,7 +148,32 @@ in
           ];
         }
       ]; */
-      extraConfig = ''
+      extraRules = [
+        {
+          users = [ cfg.user ];
+          commands = map (cmd: { command = cmd; options = [ "NOPASSWD" ]; }) [
+            "/run/current-system/sw/bin/zpool"
+            "/run/current-system/sw/bin/zfs"
+            "/run/current-system/sw/bin/zdb -l *"
+            "/run/current-system/sw/bin/lsof"
+            "/run/current-system/sw/bin/lslocks"
+            "/run/current-system/sw/bin/systemctl"
+            "/run/current-system/sw/bin/crontab"
+            "/run/current-system/sw/bin/tee /etc/systemd/system/webzfs-syncoid-job-*"
+            "/run/current-system/sw/bin/rm -f /etc/systemd/system/webzfs-syncoid-job-*"
+            "/run/current-system/sw/bin/tee /etc/systemd/system/webzfs-task-*"
+            "/run/current-system/sw/bin/rm -f /etc/systemd/system/webzfs-task-*"
+            "/run/current-system/sw/bin/cat"
+            "/run/current-system/sw/bin/tee"
+            "/run/current-system/sw/bin/mkdir"
+            "/run/current-system/sw/bin/dmesg"
+            "${pkgs.smartmontools}/bin/smartctl"
+            "${pkgs.sanoid}/bin/sanoid"
+            "${pkgs.sanoid}/bin/syncoid"
+          ];
+        }
+      ];
+/*       extraConfig = ''
         Defaults:${cfg.user} secure_path="/run/wrappers/bin:/run/current-system/sw/bin:/run/current-system/sw/sbin"
 
         # WebZFS sudo permissions
@@ -171,7 +188,7 @@ in
 
         ${cfg.user} ALL=(ALL) NOPASSWD: ${pkgs.smartmontools}/bin/smartctl
         ${cfg.user} ALL=(ALL) NOPASSWD: ${pkgs.sanoid}/bin/sanoid, ${pkgs.sanoid}/bin/syncoid
-      '';
+      ''; */
     };
 
     networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [ cfg.port ];
