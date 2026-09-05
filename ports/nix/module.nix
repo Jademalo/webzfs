@@ -59,6 +59,14 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+
+    nixpkgs.overlays = [
+      # Load derivation and add the package to nixpkgs
+      (final: prev: {
+        webzfs = prev.callPackage ./package.nix { src = self; };
+      })
+    ];
+
     users.users.${cfg.user} = {
       isSystemUser = true;
       group = cfg.group;
