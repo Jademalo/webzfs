@@ -97,7 +97,7 @@ in
       # the password of a non-root caller by exec'ing the setuid
       # `unix_chkpwd` wrapper from there.  (The systemd `path` option appends
       # /bin + /sbin, so pass the parent dir.)
-       path = with pkgs; [
+/*        path = with pkgs; [
         "/run/wrappers/bin:/usr/local/bin:/usr/bin:/bin"
 /*         zfs
         smartmontools
@@ -108,7 +108,7 @@ in
         coreutils
         gnugrep
         cronie */
-      ];
+      ]; */
 
       environment = {
         HOME = "/var/lib/webzfs";
@@ -145,7 +145,7 @@ in
     # does not).  Read-only access that is covered by group membership
     # (journalctl via `systemd-journal`) or works unprivileged (lsblk) is
     # intentionally not in sudo.
-/*     security.sudo.enable = true;
+    security.sudo.enable = true;
     security.sudo.extraConfig = ''
       Defaults:${cfg.user} secure_path="/run/current-system/sw/bin:/run/current-system/sw/sbin"
 
@@ -160,7 +160,7 @@ in
       ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/tee /etc/systemd/system/webzfs-task-*, /run/current-system/sw/bin/rm -f /etc/systemd/system/webzfs-task-*
       ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/cat, /run/current-system/sw/bin/tee, /run/current-system/sw/bin/mkdir
       ${cfg.user} ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/dmesg
-    ''; */
+    '';
 
     networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [ cfg.port ];
   };
