@@ -222,14 +222,19 @@ if [ "$VENV_PYTHON_VERSION" != "$TARGET_PYTHON_VERSION" ]; then
     echo "  The virtual environment will be upgraded from Python ${VENV_PYTHON_VERSION:-unknown} to ${TARGET_PYTHON_VERSION}"
     echo "  and all Python dependencies will be reinstalled for the new version."
     REBUILD_VENV=true
+elif ! "${VENV_DIR}/bin/python3" -m pip --version >/dev/null 2>&1; then
+    echo
+    printf "${YELLOW}Virtual environment is missing pip and will be rebuilt.${NC}\n"
+    REBUILD_VENV=true
+fi
 
-    # Make sure the target interpreter is available
-    if ! command_exists "python${TARGET_PYTHON_VERSION}"; then
-        echo
-        echo "Installing python${TARGET_PYTHON_VERSION} via pkg..."
-        PKG_PY_VERSION=$(echo "$TARGET_PYTHON_VERSION" | tr -d '.')
-        pkg install -y "python${PKG_PY_VERSION}"
-    fi
+if [ "$REBUILD_VENV" = "true" ]; then
+    # FreeBSD builds Python with --without-ensurepip, so the matching pip
+    # package is required to seed pip into the rebuilt virtual environment.
+    PKG_PY_VERSION=$(echo "$TARGET_PYTHON_VERSION" | tr -d '.')
+    echo
+    echo "Ensuring python${PKG_PY_VERSION} and py${PKG_PY_VERSION}-pip are installed via pkg..."
+    pkg install -y "python${PKG_PY_VERSION}" "py${PKG_PY_VERSION}-pip"
 
     PYTHON_CMD=$(find_python)
     if [ -z "$PYTHON_CMD" ]; then
@@ -394,12 +399,14 @@ fi
 if [ "$REBUILD_VENV" = "true" ]; then
     echo "Rebuilding virtual environment with Python ${TARGET_PYTHON_VERSION}..."
     rm -rf .venv
-    $PYTHON_PATH -m venv .venv
+    $PYTHON_PATH -m venv --without-pip .venv
     printf "${GREEN}✓${NC} Virtual environment recreated\n"
 
-    # Bootstrap pip if ensurepip did not seed it
-    if [ ! -x ".venv/bin/pip" ] && [ ! -x ".venv/bin/pip3" ]; then
-        .venv/bin/python3 -m ensurepip --upgrade > update_log.txt 2>&1
+    # Seed pip into the pip-less venv using FreeBSD's separately packaged pip.
+    if ! $PYTHON_PATH -m pip --python "$PWD/.venv" install --upgrade pip > update_log.txt 2>&1; then
+        printf "${RED}Error: Failed to install pip into rebuilt virtual environment${NC}\n"
+        echo "Check ${INSTALL_DIR}/update_log.txt for details"
+        exit 1
     fi
 
     # Clear cached wheels built for the old ABI. The unconditional wheel

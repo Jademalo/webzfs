@@ -200,14 +200,15 @@ echo "(This may take a few minutes on first run...)"
 echo
 
 # Install packages via pkg
-# python312 - Python runtime (bundles pip via ensurepip, so a separate
-#             py312-pip package is not required)
+# python312 - Python runtime
+# py312-pip - pip package used to seed the virtual environment because
+#             FreeBSD builds Python with --without-ensurepip
 # node/npm - Node.js for building CSS assets
 # smartmontools - SMART disk monitoring
 # sanoid - ZFS snapshot management (includes syncoid for replication)
 # libsodium - runtime dependency of pynacl (used by paramiko for SSH)
 # Note: rust, gmake are NOT needed when using pre-compiled wheels
-pkg install -y python312 node npm smartmontools sanoid libsodium
+pkg install -y python312 py312-pip node npm smartmontools sanoid libsodium
 
 if [ $? -ne 0 ]; then
     printf "${RED}Error: Failed to install required packages${NC}\n"
@@ -414,26 +415,24 @@ if [ -d ".venv" ]; then
         printf "${YELLOW}Existing virtual environment uses Python '${EXISTING_VERSION}', expected '${EXPECTED_VERSION}'.${NC}\n"
         echo "Recreating virtual environment to match the pre-compiled wheels..."
         rm -rf .venv
-        $PYTHON_PATH -m venv .venv
+        $PYTHON_PATH -m venv --without-pip .venv
     else
         echo "Virtual environment already exists"
     fi
 else
     echo "Creating Python virtual environment..."
-    $PYTHON_PATH -m venv .venv
+    $PYTHON_PATH -m venv --without-pip .venv
 fi
 
 
-# Verify pip was seeded into the venv by ensurepip (bundled with python312).
-# The py312-pip system package is not required, so we bootstrap pip here if
-# needed instead of relying on that package.
-if [ ! -x ".venv/bin/pip" ] && [ ! -x ".venv/bin/pip3" ]; then
-    echo "pip not found in virtual environment, bootstrapping with ensurepip..."
-    .venv/bin/python3 -m ensurepip --upgrade > install_log.txt 2>&1
-fi
-
+# FreeBSD builds Python with --without-ensurepip. Create the venv without
+# invoking ensurepip, then use the separately packaged system pip to seed it.
 echo "Installing/upgrading pip in virtual environment..."
-.venv/bin/python3 -m pip install --upgrade pip > install_log.txt 2>&1
+if ! $PYTHON_PATH -m pip --python "$PWD/.venv" install --upgrade pip > install_log.txt 2>&1; then
+    printf "${RED}Error: Failed to install pip into virtual environment${NC}\n"
+    echo "Check ${INSTALL_DIR}/install_log.txt for details"
+    exit 1
+fi
 
 
 echo "Installing Python dependencies (using pre-compiled wheels)..."
