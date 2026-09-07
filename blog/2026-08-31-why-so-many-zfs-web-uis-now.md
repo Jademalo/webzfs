@@ -6,7 +6,6 @@ tags: [question, answer, thoughts]
 
 # Why so many ZFS web UI's now?
 
-<<<<<<< HEAD
 While talking with a friend about some homelab stuff a question came up that I've seen other people make reference to as well. What is with all of the new ZFS management web UI that have come out recently? This is happening often enough that it has actually become a meme on the ZFS subreddit for "How many days since the last AI slop coded ZFS tool was made".  This clearly is happening since so many people have noticed it. 
 
 To be crystal clear up front, I don't want this to come off as an attack but I think it's a relevant point that needs to be made. I can see how some people might want to intepret it as hot take, but I do not mean it that way.
