@@ -94,8 +94,8 @@ buildNpmPackage {
   postPatch = ''
     substituteInPlace services/sanoid.py \
       --replace-fail "COMMON_PATHS = [" "COMMON_PATHS = [
-        '${lib.getExe' pkgs.sanoid "sanoid"}',
-        '${lib.getExe' pkgs.sanoid "syncoid"}',"
+        '${lib.getExe' sanoid "sanoid"}',
+        '${lib.getExe' sanoid "syncoid"}',"
   '';
 
   buildPhase = ''
