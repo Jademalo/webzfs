@@ -120,6 +120,7 @@ buildNpmPackage {
       --add-flags "-c $out/opt/webzfs/config/gunicorn.conf.py" \
       --prefix PATH ":" ${
         lib.makeBinPath [
+          "/run/wrappers/bin"
           #coreutils      # cat, mkdir, rm, tail, tee
           #gnugrep        # grep
           lsof           # lsof

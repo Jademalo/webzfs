@@ -83,7 +83,7 @@ in
       after = [ "network.target" "zfs-mount.service" ];
 
        path = with pkgs; [ 
-          "/run/wrappers" # Necessary for webzfs to run commands as sudo
+          #"/run/wrappers" # Necessary for webzfs to run commands as sudo
 /*           "${config.system.path}" # Put system packages in service environment
           lsof
           smartmontools
@@ -126,9 +126,9 @@ in
           users = [ cfg.user ];
           commands = map (cmd: { command = cmd; options = [ "NOPASSWD" ]; }) [
             # ZFS commands
-            "${config.system.path}/bin/zpool"
-            "${config.system.path}/bin/zfs"
-            "${config.system.path}/bin/zdb -l *"
+            "${pkgs.zfs}/bin/zpool"
+            "${pkgs.zfs}/bin/zfs"
+            "${pkgs.zfs}/bin/zdb -l *"
             # SMART monitoring
             "${pkgs.smartmontools}/bin/smartctl"
             # Disk utilities
