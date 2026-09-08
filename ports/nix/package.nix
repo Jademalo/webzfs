@@ -128,6 +128,7 @@ buildNpmPackage {
           lsof # lsof
           sanoid # sanoid, syncoid
           smartmontools # smartctl
+          sysstat # iostat
           systemd # journalctl, systemctl
           util-linux # blkid, dmesg, lsblk, lslocks
           zfs # zdb, zfs, zpool
