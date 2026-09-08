@@ -110,7 +110,20 @@ buildNpmPackage {
     mkdir -p $out/bin
     makeWrapper ${pythonEnv}/bin/gunicorn $out/bin/webzfs \
       --set PYTHONPATH "$out/opt/webzfs" \
-      --add-flags "-c $out/opt/webzfs/config/gunicorn.conf.py"
+      --add-flags "-c $out/opt/webzfs/config/gunicorn.conf.py" \
+      --prefix PATH ":" "/run/wrappers" \
+      --prefix PATH ":" ${
+        lib.makeBinPath [
+          #coreutils      # cat, mkdir, rm, tail, tee
+          #gnugrep        # grep
+          #lsof           # lsof
+          sanoid         # sanoid, syncoid
+          smartmontools  # smartctl
+          #systemd        # journalctl, systemctl
+          #util-linux     # blkid, dmesg, lsblk, lslocks
+          zfs            # zdb, zfs, zpool
+        ]
+      }
 
     runHook postInstall
   '';

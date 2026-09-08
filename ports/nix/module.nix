@@ -83,11 +83,11 @@ in
       after = [ "network.target" "zfs-mount.service" ];
 
        path = with pkgs; [ 
-          "/run/wrappers" # Necessary for webzfs to run commands as sudo
-          "${config.system.path}" # Put system packages in service environment
+          #"/run/wrappers" # Necessary for webzfs to run commands as sudo
+/*           "${config.system.path}" # Put system packages in service environment
           lsof
           smartmontools
-          #sanoid # Not necessary due to the package itself adding it to the store for the hardcoded path
+          #sanoid # Not necessary due to the package itself adding it to the store for the hardcoded path */
         ];
 
       environment = {
