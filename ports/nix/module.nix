@@ -126,24 +126,31 @@ in
           users = [ cfg.user ];
           commands = map (cmd: { command = cmd; options = [ "NOPASSWD" ]; }) [
             # ZFS commands
-            "${pkgs.zfs}/bin/zpool"
-            "${pkgs.zfs}/bin/zfs"
-            "${pkgs.zfs}/bin/zdb -l *"
+            lib.getExe' pkgs.zfs "zpool"
+            lib.getExe pkgs.zfs
+            "${lib.getExe' pkgs.zfs "zdb"} -l *"
+
             # SMART monitoring
-            "${pkgs.smartmontools}/bin/smartctl"
+            lib.getExe pkgs.smartmontools
+
             # Disk utilities
-            "${config.system.path}/bin/lsblk"
-            "${config.system.path}/bin/blkid"
+            lib.getExe' pkgs.util-linux "lsblk"
+            lib.getExe' pkgs.util-linux "blkid"
+
             # Open file / lock inspection (pool export busy investigation)
-            "${pkgs.lsof}/bin/lsof"
-            "${config.system.path}/bin/lslocks"
+            lib.getExe pkgs.lsof
+            lib.getExe' pkgs.util-linux "lslocks"
+
             # Sanoid/Syncoid
-            "${pkgs.sanoid}/bin/sanoid"
-            "${pkgs.sanoid}/bin/syncoid"
+            lib.getExe pkgs.sanoid
+            lib.getExe' pkgs.sanoid "syncoid"
+
             # Service management (systemctl for system services page)
-            "${config.system.path}/bin/systemctl"
+            lib.getExe' pkgs.systemd "systemctl"
+
             # Crontab editing
-            #"${config.system.path}/bin/crontab"
+            # #lib.getExe' pkgs.cron "crontab"
+
             # Scheduled syncoid job timers.
             # Unit files are created and edited with "sudo tee" (covered by the
             # general tee entry below) and enabled/disabled/reloaded with
@@ -151,28 +158,32 @@ in
             # tee entries here document that intent and keep timer management
             # working even if the general tee entry is ever narrowed. rm is
             # restricted to WebZFS-owned unit files only.
-            "${config.system.path}/bin/tee /etc/systemd/system/webzfs-syncoid-job-*"
-            "${config.system.path}/bin/rm -f /etc/systemd/system/webzfs-syncoid-job-*"
+            "${lib.getExe' pkgs.coreutils "tee"} /etc/systemd/system/webzfs-syncoid-job-*"
+            "${lib.getExe' pkgs.coreutils "rm"} -f /etc/systemd/system/webzfs-syncoid-job-*"
+
             # Unified Scheduling Hub timers. All scheduled task types (scrub, SMART
             # self-test, health check, and replication) use the webzfs-task-* unit
             # naming scheme managed by services/job_scheduler.py.
-            "${config.system.path}/bin/tee /etc/systemd/system/webzfs-task-*"
-            "${config.system.path}/bin/rm -f /etc/systemd/system/webzfs-task-*"
+            "${lib.getExe' pkgs.coreutils "tee"} /etc/systemd/system/webzfs-task-*"
+            "${lib.getExe' pkgs.coreutils "rm"} -f /etc/systemd/system/webzfs-task-*"
+
             # File editing (for config files like smartd.conf, sanoid.conf)
-            "${config.system.path}/bin/cat"
-            "${config.system.path}/bin/tee"
-            "${config.system.path}/bin/mkdir"
+            lib.getExe' pkgs.coreutils "cat"
+            lib.getExe' pkgs.coreutils "tee"
+            lib.getExe' pkgs.coreutils "mkdir"
+
             # Read system journal and plain-text syslog files for the
             # Observability -> System Log page. journalctl needs sudo (or
             # systemd-journal group) on most distros. tail covers Debian/Ubuntu
             # (/var/log/syslog) and old RHEL (/var/log/messages).
-            "${config.system.path}/bin/journalctl"
-            "${config.system.path}/bin/tail"
+            lib.getExe' pkgs.systemd "journalctl"
+            lib.getExe' pkgs.coreutils "tail"
+
             # Support bundle log collection. Reading /var/log/messages and
             # /var/log/syslog (typically mode 640 root:adm) and the kernel ring
             # buffer requires elevated privileges for the unprivileged webzfs user.
-            "${config.system.path}/bin/grep"
-            "${config.system.path}/bin/dmesg"      
+            lib.getExe pkgs.gnugrep
+            lib.getExe' pkgs.util-linux "dmesg" 
           ];
         }
       ];
