@@ -16,7 +16,7 @@
   zfs,
   pv,
   lzop,
-  mbuffer
+  mbuffer,
 }:
 
 let
@@ -91,8 +91,7 @@ buildNpmPackage {
   postPatch = ''
     substituteInPlace services/sanoid.py \
       --replace-fail "COMMON_PATHS = [" "COMMON_PATHS = [
-        '${lib.getExe' sanoid "sanoid"}',
-        '${lib.getExe' sanoid "syncoid"}',"
+        '${lib.getExe' sanoid "sanoid"}',"
     substituteInPlace services/syncoid.py \
       --replace-fail "COMMON_PATHS = [" "COMMON_PATHS = [
         '${lib.getExe' sanoid "syncoid"}',"
@@ -125,15 +124,15 @@ buildNpmPackage {
           cron # crontab
           gnugrep # grep
           lsof # lsof
+          lzop
+          mbuffer
+          pv
           sanoid # sanoid, syncoid
           smartmontools # smartctl
           sysstat # iostat
           systemd # journalctl, systemctl
           util-linux # blkid, dmesg, lsblk, lslocks
           zfs # zdb, zfs, zpool
-          pv
-          lzop
-          mbuffer
         ]
       }
 
