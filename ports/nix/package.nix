@@ -2,8 +2,15 @@
 , buildNpmPackage
 , python3
 , makeWrapper
-, sanoid
 , importNpmLock
+#, coreutils   
+#, gnugrep     
+, lsof        
+, sanoid       
+, smartmontools
+#, systemd     
+#, util-linux  
+, zfs          
 }:
 
 let
@@ -116,7 +123,7 @@ buildNpmPackage {
         lib.makeBinPath [
           #coreutils      # cat, mkdir, rm, tail, tee
           #gnugrep        # grep
-          #lsof           # lsof
+          lsof           # lsof
           sanoid         # sanoid, syncoid
           smartmontools  # smartctl
           #systemd        # journalctl, systemctl
