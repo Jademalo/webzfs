@@ -95,6 +95,8 @@ buildNpmPackage {
     substituteInPlace services/syncoid.py \
       --replace-fail "COMMON_PATHS = [" "COMMON_PATHS = [
         '${lib.getExe' sanoid "syncoid"}',"
+    substituteInPlace services/syncoid.py \
+      --replace-fail "HELPER_TOOLS = ['pv', 'lzop', 'mbuffer']" "HELPER_TOOLS = []"
   '';
 
   buildPhase = ''
@@ -124,9 +126,6 @@ buildNpmPackage {
           cron # crontab
           gnugrep # grep
           lsof # lsof
-          lzop
-          mbuffer
-          pv
           sanoid # sanoid, syncoid
           smartmontools # smartctl
           sysstat # iostat
