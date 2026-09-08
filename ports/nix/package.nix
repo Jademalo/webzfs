@@ -3,12 +3,12 @@
 , python3
 , makeWrapper
 , importNpmLock
-#, coreutils   
-#, gnugrep     
+, coreutils   
+, gnugrep     
 , lsof        
 , sanoid       
 , smartmontools
-#, systemd     
+, systemd     
 , util-linux  
 , zfs          
 }:
@@ -94,8 +94,8 @@ buildNpmPackage {
   postPatch = ''
     substituteInPlace services/sanoid.py \
       --replace-fail "COMMON_PATHS = [" "COMMON_PATHS = [
-        '${sanoid}/bin/sanoid',
-        '${sanoid}/bin/syncoid',"
+        '${lib.getExe' pkgs.sanoid "sanoid"}',
+        '${lib.getExe' pkgs.sanoid "syncoid"}',"
   '';
 
   buildPhase = ''
@@ -121,12 +121,12 @@ buildNpmPackage {
       --prefix PATH ":" ${
         lib.makeBinPath [
           "/run/wrappers"
-          #coreutils      # cat, mkdir, rm, tail, tee
-          #gnugrep        # grep
+          coreutils      # cat, mkdir, rm, tail, tee
+          gnugrep        # grep
           lsof           # lsof
           sanoid         # sanoid, syncoid
           smartmontools  # smartctl
-          #systemd        # journalctl, systemctl
+          systemd        # journalctl, systemctl
           util-linux     # blkid, dmesg, lsblk, lslocks
           zfs            # zdb, zfs, zpool
         ]
