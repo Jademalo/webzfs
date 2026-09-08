@@ -3,6 +3,7 @@
 , python3
 , makeWrapper
 , sanoid
+, importNpmLock
 }:
 
 let
@@ -72,12 +73,12 @@ buildNpmPackage {
   inherit pname version src;
 
   # Replaces fixed npmDepsHash by reading package-lock.json
-  npmDeps = pkgs.importNpmLock {
+  npmDeps = importNpmLock {
     npmRoot = ./../..;
   };
 
   # Required companion hook when using importNpmLock
-  npmConfigHook = pkgs.importNpmLock.npmConfigHook;
+  npmConfigHook = importNpmLock.npmConfigHook;
 
   nativeBuildInputs = [ makeWrapper ];
   buildInputs = [ pythonEnv ];
