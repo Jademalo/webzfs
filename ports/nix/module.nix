@@ -126,27 +126,27 @@ in
           users = [ cfg.user ];
           commands = map (cmd: { command = cmd; options = [ "NOPASSWD" ]; }) [
             # ZFS commands
-            lib.getExe' pkgs.zfs "zpool"
-            lib.getExe pkgs.zfs
+            (lib.getExe' pkgs.zfs "zpool")
+            (lib.getExe pkgs.zfs)
             "${lib.getExe' pkgs.zfs "zdb"} -l *"
 
             # SMART monitoring
-            lib.getExe pkgs.smartmontools
+            (lib.getExe pkgs.smartmontools)
 
             # Disk utilities
-            lib.getExe' pkgs.util-linux "lsblk"
-            lib.getExe' pkgs.util-linux "blkid"
+            (lib.getExe' pkgs.util-linux "lsblk")
+            (lib.getExe' pkgs.util-linux "blkid")
 
             # Open file / lock inspection (pool export busy investigation)
-            lib.getExe pkgs.lsof
-            lib.getExe' pkgs.util-linux "lslocks"
+            (lib.getExe pkgs.lsof)
+            (lib.getExe' pkgs.util-linux "lslocks")
 
             # Sanoid/Syncoid
-            lib.getExe pkgs.sanoid
-            lib.getExe' pkgs.sanoid "syncoid"
+            (lib.getExe pkgs.sanoid)
+            (lib.getExe' pkgs.sanoid "syncoid")
 
             # Service management (systemctl for system services page)
-            lib.getExe' pkgs.systemd "systemctl"
+            (lib.getExe' pkgs.systemd "systemctl")
 
             # Crontab editing
             # #lib.getExe' pkgs.cron "crontab"
@@ -168,22 +168,22 @@ in
             "${lib.getExe' pkgs.coreutils "rm"} -f /etc/systemd/system/webzfs-task-*"
 
             # File editing (for config files like smartd.conf, sanoid.conf)
-            lib.getExe' pkgs.coreutils "cat"
-            lib.getExe' pkgs.coreutils "tee"
-            lib.getExe' pkgs.coreutils "mkdir"
+            (lib.getExe' pkgs.coreutils "cat")
+            (lib.getExe' pkgs.coreutils "tee")
+            (lib.getExe' pkgs.coreutils "mkdir")
 
             # Read system journal and plain-text syslog files for the
             # Observability -> System Log page. journalctl needs sudo (or
             # systemd-journal group) on most distros. tail covers Debian/Ubuntu
             # (/var/log/syslog) and old RHEL (/var/log/messages).
-            lib.getExe' pkgs.systemd "journalctl"
-            lib.getExe' pkgs.coreutils "tail"
+            (lib.getExe' pkgs.systemd "journalctl")
+            (lib.getExe' pkgs.coreutils "tail")
 
             # Support bundle log collection. Reading /var/log/messages and
             # /var/log/syslog (typically mode 640 root:adm) and the kernel ring
             # buffer requires elevated privileges for the unprivileged webzfs user.
-            lib.getExe pkgs.gnugrep
-            lib.getExe' pkgs.util-linux "dmesg" 
+            (lib.getExe pkgs.gnugrep)
+            (lib.getExe' pkgs.util-linux "dmesg")
           ];
         }
       ];
