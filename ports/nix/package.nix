@@ -118,9 +118,9 @@ buildNpmPackage {
     makeWrapper ${pythonEnv}/bin/gunicorn $out/bin/webzfs \
       --set PYTHONPATH "$out/opt/webzfs" \
       --add-flags "-c $out/opt/webzfs/config/gunicorn.conf.py" \
-      --prefix PATH ":" "/run/wrappers" \
       --prefix PATH ":" ${
         lib.makeBinPath [
+          "/run/wrappers/bin"
           #coreutils      # cat, mkdir, rm, tail, tee
           #gnugrep        # grep
           lsof           # lsof
