@@ -71,10 +71,13 @@ in
 buildNpmPackage {
   inherit pname version src;
 
-  # Compute the real hash by running:
-  #   nix-shell -p nix-prefetch-npm-deps --run 'nix-prefetch-npm-deps package-lock.json'
-  # then replace lib.fakeHash with the output.
-  npmDepsHash = "sha256-Aq8YnyZjo30ADDFVirt//YzNh5uB2N1WAJt2q7KyvrI=";
+  # Replaces fixed npmDepsHash by reading package-lock.json
+  npmDeps = pkgs.importNpmLock {
+    npmRoot = ./../..;
+  };
+
+  # Required companion hook when using importNpmLock
+  npmConfigHook = pkgs.importNpmLock.npmConfigHook;
 
   nativeBuildInputs = [ makeWrapper ];
   buildInputs = [ pythonEnv ];
