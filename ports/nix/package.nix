@@ -14,6 +14,9 @@
   systemd,
   util-linux,
   zfs,
+  pv,
+  lzop,
+  mbuffer
 }:
 
 let
@@ -128,6 +131,9 @@ buildNpmPackage {
           systemd # journalctl, systemctl
           util-linux # blkid, dmesg, lsblk, lslocks
           zfs # zdb, zfs, zpool
+          pv
+          lzop
+          mbuffer
         ]
       }
 
