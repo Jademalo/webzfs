@@ -10,6 +10,7 @@
   lsof,
   sanoid,
   smartmontools,
+  sysstat,
   systemd,
   util-linux,
   zfs,
