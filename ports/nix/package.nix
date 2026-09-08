@@ -9,7 +9,7 @@
 , sanoid       
 , smartmontools
 #, systemd     
-#, util-linux  
+, util-linux  
 , zfs          
 }:
 
