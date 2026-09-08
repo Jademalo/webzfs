@@ -5,37 +5,26 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
   };
 
-  outputs = { self, nixpkgs }:
+  outputs =
+    { self, nixpkgs }:
     let
-      systems = [ "x86_64-linux" "aarch64-linux" ];
-      forAllSystems = nixpkgs.lib.genAttrs systems;
-
-      overlay = final: prev: {
-        webzfs = final.callPackage ./nix/package.nix { src = self; };
-      };
+      supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
+      forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
+      pkgsFor = system: nixpkgs.legacyPackages.${system};
     in
     {
-      packages = forAllSystems (system:
-        let
-          pkgs = import nixpkgs { inherit system; overlays = [ overlay ]; };
-        in
-        {
-          webzfs = pkgs.webzfs;
-          default = pkgs.webzfs;
-        }
-      );
+      packages = forAllSystems (system: rec {
+        webzfs = (pkgsFor system).callPackage ./ports/nix/package.nix { };
+        default = webzfs;
+      });
 
-      nixosModules.webzfs = import ./nix/module.nix;
+      devShells = forAllSystems (system: {
+        default = import ./ports/nix/dev-shell.nix { pkgs = pkgsFor system; };
+      });
 
-      overlays.default = overlay;
-
-      devShells = forAllSystems (system:
-        let
-          pkgs = import nixpkgs { inherit system; };
-        in
-        {
-          default = import ./nix/dev-shell.nix { inherit pkgs; };
-        }
-      );
+      nixosModules = rec {
+        webzfs = import ./ports/nix/module.nix;
+        default = webzfs;
+      };
     };
 }
