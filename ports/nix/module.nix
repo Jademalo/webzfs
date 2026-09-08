@@ -142,7 +142,7 @@ in
             (lib.getExe' pkgs.util-linux "lslocks")
 
             # Sanoid/Syncoid
-            (lib.getExe pkgs.sanoid)
+            (lib.getExe' pkgs.sanoid "sanoid")
             (lib.getExe' pkgs.sanoid "syncoid")
 
             # Service management (systemctl for system services page)
