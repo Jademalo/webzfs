@@ -82,14 +82,6 @@ in
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" "zfs-mount.service" ];
 
-       path = with pkgs; [ 
-          #"/run/wrappers" # Necessary for webzfs to run commands as sudo
-/*           "${config.system.path}" # Put system packages in service environment
-          lsof
-          smartmontools
-          #sanoid # Not necessary due to the package itself adding it to the store for the hardcoded path */
-        ];
-
       environment = {
         HOME = "/var/lib/webzfs";
         PYTHONPATH = webzfsDir;
@@ -149,7 +141,7 @@ in
             (lib.getExe' pkgs.systemd "systemctl")
 
             # Crontab editing
-            # #lib.getExe' pkgs.cron "crontab"
+            (lib.getExe' pkgs.cron "crontab")
 
             # Scheduled syncoid job timers.
             # Unit files are created and edited with "sudo tee" (covered by the

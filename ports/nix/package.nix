@@ -3,7 +3,8 @@
 , python3
 , makeWrapper
 , importNpmLock
-, coreutils   
+, coreutils
+, cron
 , gnugrep     
 , lsof        
 , sanoid       
@@ -120,8 +121,9 @@ buildNpmPackage {
       --add-flags "-c $out/opt/webzfs/config/gunicorn.conf.py" \
       --prefix PATH ":" ${
         lib.makeBinPath [
-          "/run/wrappers"
+          "/run/wrappers"# sudo
           coreutils      # cat, mkdir, rm, tail, tee
+          cron           # crontab
           gnugrep        # grep
           lsof           # lsof
           sanoid         # sanoid, syncoid
