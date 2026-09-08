@@ -14,9 +14,6 @@
   systemd,
   util-linux,
   zfs,
-  pv,
-  lzop,
-  mbuffer,
 }:
 
 let
