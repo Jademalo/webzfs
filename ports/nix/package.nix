@@ -18,18 +18,11 @@
 
 let
   pname = "webzfs";
-  # Derive the package version from upstream pyproject.toml so it remains
-  # the single source of truth for the WebZFS version.
+  # Derive the package version from upstream pyproject.toml
   version = (lib.importTOML ../../pyproject.toml).tool.poetry.version;
   src = ./../..;
 
   # Python dependencies derived from upstream requirements.txt.
-  # Version pins are intentionally relaxed: nixpkgs resolves its own
-  # versions, and the exact pins from Poetry cannot be satisfied across
-  # the nixpkgs package set.
-  #
-  # ecdsa is intentionally omitted: python-jose falls back to the
-  # cryptography backend, and ecdsa is flagged insecure in nixpkgs.
   pythonDeps =
     python3Packages: with python3Packages; [
       annotated-doc
@@ -83,7 +76,6 @@ in
 buildNpmPackage {
   inherit pname version src;
 
-  # Replaces fixed npmDepsHash by reading package-lock.json
   npmDeps = importNpmLock {
     npmRoot = ./../..;
   };
@@ -97,6 +89,9 @@ buildNpmPackage {
     substituteInPlace services/sanoid.py \
       --replace-fail "COMMON_PATHS = [" "COMMON_PATHS = [
         '${lib.getExe' sanoid "sanoid"}',
+        '${lib.getExe' sanoid "syncoid"}',"
+    substituteInPlace services/syncoid.py \
+      --replace-fail "COMMON_PATHS = [" "COMMON_PATHS = [
         '${lib.getExe' sanoid "syncoid"}',"
   '';
 
