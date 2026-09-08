@@ -127,7 +127,7 @@ buildNpmPackage {
           sanoid         # sanoid, syncoid
           smartmontools  # smartctl
           #systemd        # journalctl, systemctl
-          #util-linux     # blkid, dmesg, lsblk, lslocks
+          util-linux     # blkid, dmesg, lsblk, lslocks
           zfs            # zdb, zfs, zpool
         ]
       }
