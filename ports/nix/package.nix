@@ -11,7 +11,7 @@
   sanoid,
   smartmontools,
   sysstat,
-  systemd,
+  systemdMinimal,
   util-linux,
   zfs,
 }:
@@ -126,7 +126,7 @@ buildNpmPackage {
           sanoid # sanoid, syncoid
           smartmontools # smartctl
           sysstat # iostat
-          systemd # journalctl, systemctl
+          systemdMinimal # journalctl, systemctl
           util-linux # blkid, dmesg, lsblk, lslocks
           zfs # zdb, zfs, zpool
         ]
