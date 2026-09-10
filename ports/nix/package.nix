@@ -18,11 +18,11 @@
 
 let
   pname = "webzfs";
-  # Derive the package version from upstream pyproject.toml
+  # Derive the package version from pyproject.toml
   version = (lib.importTOML ../../pyproject.toml).tool.poetry.version;
   src = ./../..;
 
-  # Python dependencies derived from upstream requirements.txt.
+  # Python dependencies derived from requirements.txt.
   pythonDeps =
     python3Packages: with python3Packages; [
       annotated-doc
@@ -76,6 +76,7 @@ in
 buildNpmPackage {
   inherit pname version src;
 
+  # npm dependencies derived from package-lock.json
   npmDeps = importNpmLock {
     npmRoot = ./../..;
   };
@@ -136,7 +137,7 @@ buildNpmPackage {
   '';
 
   meta = with lib; {
-    description = "WebZFS - Web-based ZFS management interface";
+    description = "Web-based ZFS management interface";
     homepage = "https://github.com/webzfs/webzfs";
     license = licenses.mit;
     platforms = platforms.linux;
