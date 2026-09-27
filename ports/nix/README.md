@@ -2,6 +2,21 @@
 
 This directory contains the Nix packaging which is exposed through the flake at the repository root, so you can consume this project directly as a flake input.
 
+## Note - Experimental work in progress
+
+This Nix derivation is an experimental work in progress, and as such some functionality isn't fully implemented. 
+
+Due to the declarative nature of NixOS, attempting to configure certain services using WebZFS that should be declaratively configured within `configuration.nix` will fail.
+
+At present, the following limitations are known;
+- Attempting to modify Sanoid and Syncoid scheduling will fail, but existing schedules will be visible.
+- Schedules created under `utilities/scheduling` will fail or behave unpredictably. It is recommended to avoid using this section in favour of declaring the configuration directly.
+- Smartd Daemon Configuration does not function.
+
+It is recommended in all of the above cases to instead configure the services directly within your `configuration.nix`, and use WebZFS for imperative actions and monitoring.
+
+Further discussion about the issues and limitations can be found [in the related issue](https://github.com/webzfs/webzfs/issues/162) and [the original pull request](https://github.com/webzfs/webzfs/pull/229).
+
 ## What's here
 
 | File              | Purpose                                                             |
