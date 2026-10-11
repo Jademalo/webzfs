@@ -99,6 +99,18 @@ if ! id "$WEBZFS_USER" &>/dev/null; then
     exit 1
 fi
 
+# Check the existing complete sudoers configuration before stopping WebZFS or
+# copying files. An unrelated sudoers.d entry can fail the later validation;
+# it must be repaired by the administrator, not changed by this updater.
+echo "Checking existing sudoers configuration..."
+if ! command_exists visudo || ! visudo -c; then
+    echo -e "${RED}Error: Existing sudoers configuration failed validation.${NC}"
+    echo "No WebZFS files or services have been changed."
+    echo "Review the visudo output above, fix the reported file (including"
+    echo "ownership and mode 0440 where required), then run visudo -c and retry."
+    exit 1
+fi
+
 # Node.js/npm preflight (GitHub issue #209).
 # The update rebuilds CSS with npm install and npm run build:css as the
 # webzfs service account. Verify a usable non-Snap Node.js 20+ toolchain

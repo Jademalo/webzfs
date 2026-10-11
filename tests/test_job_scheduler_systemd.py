@@ -227,3 +227,33 @@ def test_updater_migrates_only_recognized_legacy_pairs(tmp_path):
     assert result.returncode != 0
     assert service.is_file() and timer.is_file()
     assert "unrecognized" in result.stdout
+
+
+@pytest.mark.parametrize("visudo_status", [0, 1])
+def test_updater_checks_existing_sudoers_before_changes(visudo_status):
+    script = (Path(__file__).resolve().parents[1] / "update_linux.sh").read_text()
+    start = script.index("# Check the existing complete sudoers configuration")
+    end = script.index("# Node.js/npm preflight", start)
+    assert end < script.index("systemctl stop webzfs")
+    assert end < script.index("rsync -a")
+    check = script[start:end]
+    command = "\n".join(
+        (
+            "set -e",
+            "RED=''",
+            "NC=''",
+            "command_exists() { return 0; }",
+            f"visudo() {{ [ \"$1\" = -c ] && return {visudo_status}; }}",
+            check,
+            "echo 'update may proceed'",
+        )
+    )
+    result = subprocess.run(["bash", "-c", command], capture_output=True, text=True)
+    if visudo_status:
+        assert result.returncode == 1
+        assert "Existing sudoers configuration failed validation" in result.stdout
+        assert "No WebZFS files or services have been changed" in result.stdout
+        assert "update may proceed" not in result.stdout
+    else:
+        assert result.returncode == 0
+        assert "update may proceed" in result.stdout

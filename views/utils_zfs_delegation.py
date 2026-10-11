@@ -85,15 +85,24 @@ def build_tree(datasets: dict, entries: list, selected: str) -> list:
 
 
 @router.get("/")
-def index(request: Request, dataset: str = "", message: str = "", username: str = Depends(authorized_user)):
+def index(request: Request, username: str = Depends(authorized_user)):
+    """Render the overview shell without waiting for ZFS commands."""
+    return render(request)
+
+
+@router.get("/content-partial")
+def content_partial(request: Request, dataset: str = "", message: str = "",
+                    username: str = Depends(authorized_user)):
+    """Load delegation state for the deferred overview content."""
     try:
         state = delegation.load_state(dataset)
         accounts = {row.key: delegation.principal_id(row.kind, row.principal)
                     for row in state["entries"] if row.kind in {"user", "group", "everyone"}}
         tree = build_tree(state["datasets"], state["entries"], state["dataset"])
-        return render(request, state=state, accounts=accounts, message=message, tree=tree)
+        return render(request, "content_partial", state=state, accounts=accounts,
+                      message=message, tree=tree)
     except DelegationError as error:
-        return render(request, state=None, error=str(error), status=400)
+        return render(request, "content_partial", state=None, error=str(error))
 
 
 @router.post("/review")
