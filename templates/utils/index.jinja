@@ -84,6 +84,7 @@
             </a>
 
             <!-- ZED Event Scripts -->
+            {% if zed_available %}
             <a href="/utils/zed" class="card animate-fade-in hover:scale-[1.01] transition-transform duration-200 group" style="animation-delay: 0.075s;">
                 <div class="card-body py-4">
                     <div class="flex items-center gap-4">
@@ -105,6 +106,26 @@
                     </div>
                 </div>
             </a>
+            {% else %}
+            <div class="card opacity-60 animate-fade-in" style="animation-delay: 0.075s;" aria-disabled="true">
+                <div class="card-body py-4">
+                    <div class="flex items-center gap-4">
+                        <div class="p-3 bg-bg-elevated-2 rounded-lg flex-shrink-0">
+                            <svg class="w-7 h-7 text-text-tertiary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                            </svg>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex flex-wrap items-center gap-2">
+                                <h2 class="text-xl font-semibold text-text-secondary">ZED Event Scripts</h2>
+                                <span class="badge-secondary">Linux Only</span>
+                            </div>
+                            <p class="text-text-tertiary text-sm mt-0.5">Manage ZFS Event Daemon ZEDLETs: enable packaged handlers, create custom event hooks, and edit zed.rc</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
 
             <!-- Custom VDEV Properties -->
             <a href="/utils/vdev-properties/" class="card animate-fade-in hover:scale-[1.01] transition-transform duration-200 group" style="animation-delay: 0.075s;">

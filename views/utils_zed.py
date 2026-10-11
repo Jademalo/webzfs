@@ -8,18 +8,26 @@ in the background.
 
 import logging
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from auth.dependencies import get_current_user
 from config.templates import templates
 from services.audit_logger import audit_logger
+from services.utils import is_linux
 from services.zed import ZedService, ZED_EVENT_PREFIXES
 
 logger = logging.getLogger(__name__)
 
+
+def require_linux_zed():
+    """Prevent ZED reads and mutations on unsupported operating systems."""
+    if not is_linux():
+        raise HTTPException(status_code=403, detail="ZED is available on Linux only")
+
+
 router = APIRouter(
-    tags=["zed"], dependencies=[Depends(get_current_user)]
+    tags=["zed"], dependencies=[Depends(get_current_user), Depends(require_linux_zed)]
 )
 zed_service = ZedService()
 

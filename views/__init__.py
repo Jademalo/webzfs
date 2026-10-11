@@ -5,6 +5,7 @@ import views.dashboard
 import views.utils_shell
 import views.utils_text
 import views.utils_files
+import views.utils_index
 import views.utils_scrub
 import views.utils_zed
 import views.utils_zfs_delegation
@@ -40,6 +41,7 @@ router.include_router(views.zfs_performance.router)
 router.include_router(views.fleet.router)
 
 # Utilities Routes (organized under /utils)
+router.include_router(views.utils_index.router, prefix="/utils")
 router.include_router(views.utils_scrub.router, prefix="/utils")
 router.include_router(views.utils_zed.router, prefix="/utils/zed")
 router.include_router(views.utils_zfs_delegation.router, prefix="/utils/zfs-delegation")

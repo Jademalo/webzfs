@@ -1,5 +1,5 @@
 """
-Utilities Index and Scrub Overview Routes
+Scrub Overview Routes
 
 The scrub page is an overview, matching the pattern used by
 /utils/smart: a page shell renders immediately and the pool data is
@@ -25,10 +25,7 @@ from services.audit_logger import audit_logger
 from services.dashboard import get_scrub_status_all
 from services.schedule_utils import describe_schedule, preview_next_runs
 from services.storage import FileStorageService
-from services.shell_settings import can_use_shell
-from services.zfs_delegation import can_manage_zfs_delegation
 from services.zfs_pool import ZFSPoolService
-from core.request_context import is_cockpit_request
 
 logger = logging.getLogger(__name__)
 
@@ -55,20 +52,6 @@ def _schedules_by_pool() -> dict:
     except Exception as read_error:
         logger.warning(f"Could not read scrub schedules: {read_error}")
     return by_pool
-
-
-@router.get("/")
-def index(request: Request, username: str = Depends(get_current_user)):
-    """Display the utilities page with cards for each utility."""
-    return templates.TemplateResponse(
-        request,
-        name="utils/index.jinja",
-        context={
-            "cockpit_context": is_cockpit_request(request),
-            "shell_allowed": can_use_shell(username),
-            "delegation_allowed": can_manage_zfs_delegation(username),
-        },
-    )
 
 
 @router.get("/scrub", response_class=HTMLResponse)

@@ -6,7 +6,7 @@ for Executable Tasks) by reading native filesystem state. No WebZFS
 database is used for enabled/disabled tracking. State is derived entirely
 from ZED's own directory layout, symlinks, ownership, and permissions.
 
-Supports Linux, FreeBSD, and NetBSD.
+Web routes expose this service on Linux only.
 """
 
 import hashlib
