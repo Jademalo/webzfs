@@ -1,0 +1,32 @@
+{% extends "layout.jinja" %}
+{% set active_page = 'utils' %}
+{% block title %}ZFS Delegated Permissions{% endblock %}
+{% block content %}
+<div class="space-y-6" hx-boost="false">
+    <nav class="text-sm text-text-tertiary">
+        <a href="/utils" class="hover:text-primary-400">Utilities</a>
+        <span class="mx-2">/</span>
+        <span class="text-text-primary">ZFS Delegated Permissions</span>
+    </nav>
+
+    <div>
+        <h1 class="text-3xl font-bold text-text-primary">ZFS Delegated Permissions</h1>
+        <p class="text-text-secondary mt-1">Manage <code class="text-sm">zfs allow</code> delegations for local Unix users and groups. Each change maps to one native command; create-time configuration is shown read-only.</p>
+    </div>
+
+    <div id="delegation-content"
+         hx-get="{{ base_url }}/content-partial?{{ request.query_params }}"
+         hx-trigger="load"
+         hx-swap="innerHTML"
+         class="space-y-6">
+        <div class="flex flex-col items-center justify-center py-16" role="status" aria-live="polite">
+            <svg class="animate-spin h-10 w-10 text-primary-400 mb-4" aria-hidden="true" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <p class="text-text-secondary text-lg">Loading ZFS delegated permissions...</p>
+            <p class="text-text-tertiary text-sm mt-1">Reading datasets and delegation rules from ZFS. This may take a moment.</p>
+        </div>
+    </div>
+</div>
+{% endblock %}

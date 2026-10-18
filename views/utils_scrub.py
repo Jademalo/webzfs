@@ -1,5 +1,5 @@
 """
-Utilities Index and Scrub Overview Routes
+Scrub Overview Routes
 
 The scrub page is an overview, matching the pattern used by
 /utils/smart: a page shell renders immediately and the pool data is
@@ -13,6 +13,7 @@ Unified Scheduling Hub (/utils/scheduling); this page links to it.
 The old /utils/scrub-scheduling URL redirects here so bookmarks and
 documentation links keep working.
 """
+
 import logging
 
 from fastapi import APIRouter, Depends, Request
@@ -39,26 +40,18 @@ def _schedules_by_pool() -> dict:
     by_pool: dict = {}
     try:
         for schedule in storage_service.get_scrub_schedules():
-            pool_name = schedule.get('pool', '')
+            pool_name = schedule.get("pool", "")
             entry = dict(schedule)
-            entry['schedule_human'] = describe_schedule(
-                schedule.get('schedule', '')
-            )
+            entry["schedule_human"] = describe_schedule(schedule.get("schedule", ""))
             try:
-                upcoming = preview_next_runs(schedule.get('schedule', ''), count=1)
-                entry['next_run_preview'] = upcoming[0] if upcoming else ''
+                upcoming = preview_next_runs(schedule.get("schedule", ""), count=1)
+                entry["next_run_preview"] = upcoming[0] if upcoming else ""
             except Exception:
-                entry['next_run_preview'] = ''
+                entry["next_run_preview"] = ""
             by_pool.setdefault(pool_name, []).append(entry)
     except Exception as read_error:
         logger.warning(f"Could not read scrub schedules: {read_error}")
     return by_pool
-
-
-@router.get("/")
-def index(request: Request):
-    """Display the utilities page with cards for each utility."""
-    return templates.TemplateResponse(request, name="utils/index.jinja", context={})
 
 
 @router.get("/scrub", response_class=HTMLResponse)
@@ -90,8 +83,9 @@ def scrub_content_partial(request: Request):
 
 
 @router.post("/scrub/{pool_name}/start", response_class=HTMLResponse)
-def start_scrub_now(request: Request, pool_name: str,
-                    current_user: str = Depends(get_current_user)):
+def start_scrub_now(
+    request: Request, pool_name: str, current_user: str = Depends(get_current_user)
+):
     """Start a scrub on one pool immediately from the overview page."""
     try:
         pool_service.scrub_pool(pool_name)
@@ -104,8 +98,11 @@ def start_scrub_now(request: Request, pool_name: str,
         )
     except Exception as scrub_error:
         audit_logger.log_pool_scrub(
-            user=current_user, pool_name=pool_name, action="start",
-            success=False, error=str(scrub_error),
+            user=current_user,
+            pool_name=pool_name,
+            action="start",
+            success=False,
+            error=str(scrub_error),
         )
         return RedirectResponse(
             url=f"/utils/scrub?error={scrub_error}",
